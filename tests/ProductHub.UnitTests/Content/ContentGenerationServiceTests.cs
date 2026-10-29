@@ -41,6 +41,7 @@ public sealed class ContentGenerationServiceTests
             "model",
             "prompt",
             "de",
+            GroundingMode.FactsOnly,
             "trace"
         );
         generation.Complete(1, 2);
@@ -144,6 +145,29 @@ public sealed class ContentGenerationServiceTests
         Assert.Equal(0, store.SaveCount);
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(21)]
+    public async Task GenerateAsync_RejectsInvalidTopKBeforePersistence(int topK)
+    {
+        var store = new FakeStore { Product = Product.Create("SKU-1", "Bottle", "Acme") };
+        await Assert.ThrowsAsync<ValidationException>(() =>
+            CreateService(store, new FakeGenerator())
+                .GenerateAsync(
+                    new GenerateDraftCommand(
+                        store.Product.Id,
+                        "de",
+                        "key",
+                        "trace",
+                        UseRag: true,
+                        TopK: topK
+                    ),
+                    CancellationToken.None
+                )
+        );
+        Assert.Equal(0, store.SaveCount);
+    }
+
     private static ContentGenerationService CreateService(
         FakeStore store,
         FakeGenerator generator
@@ -226,9 +250,7 @@ public sealed class ContentGenerationServiceTests
             CancellationToken cancellationToken
         ) =>
             Task.FromResult<IReadOnlyList<ContentDraft>>(
-                Draft is not null
-                && Draft.ProductId == productId
-                && Draft.Language == language
+                Draft is not null && Draft.ProductId == productId && Draft.Language == language
                     ? [Draft]
                     : []
             );

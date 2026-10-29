@@ -11,6 +11,8 @@ import {
   Pencil,
   Pin,
   Sparkles,
+  Trash2,
+  Upload,
   X,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -90,6 +92,21 @@ type Generation = {
   completedAt?: string;
   status: string;
   errorCode?: string;
+  groundingMode: string;
+  requestedTopK?: number;
+  retrievalStatus: string;
+  retrievalDurationMs?: number;
+  retrievedChunkCount: number;
+  retrievedDocumentCount: number;
+  retrievalSources: { documentId: string; fileName: string; citation: string; score: number }[];
+  retrievalErrorCode?: string;
+};
+type KnowledgeDocument = {
+  id: string;
+  productId: string;
+  fileName: string;
+  status: number | string;
+  chunkCount: number;
 };
 type DraftHistoryRow = {
   draft: Draft;
@@ -109,6 +126,9 @@ type ModelAuditRow = {
   tokens: number;
   runStatus: string;
   trace: string;
+  grounding: string;
+  topK: string;
+  evidence: string;
 };
 type DraftForm = {
   title: string;
@@ -144,6 +164,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       problem?.detail ?? `${response.status} ${response.statusText}`,
     );
   }
+  if (response.status === 204) return undefined as T;
   return response.json();
 }
 const statusName = (status: Draft["status"]) =>
@@ -152,7 +173,6 @@ const statusName = (status: Draft["status"]) =>
     : (["Pending review", "Approved", "Rejected"][status] ?? "Unknown");
 const statusClass = (status: Draft["status"]) =>
   statusName(status).toLowerCase().replace(" ", "-");
-
 function App() {
   const [currentUser, setCurrentUser] = useState<
     CurrentUser | null | undefined
@@ -168,7 +188,11 @@ function App() {
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [dialog, setDialog] = useState<"catalog" | "product" | null>(null);
+  const [dialog, setDialog] = useState<"catalog" | "product" | "generate" | null>(null);
+  const [useRag, setUseRag] = useState(false);
+  const [topK, setTopK] = useState(5);
+  const [knowledgeDocuments, setKnowledgeDocuments] = useState<KnowledgeDocument[]>([]);
+  const [knowledgeFile, setKnowledgeFile] = useState<File | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [editingDraft, setEditingDraft] = useState(false);
   const [draftForm, setDraftForm] = useState<DraftForm>({
@@ -262,6 +286,65 @@ function App() {
   }, [languageDrafts, selectedId]);
   useEffect(() => setEditingDraft(false), [draft?.id]);
 
+  const loadKnowledgeDocuments = async (productId: string) => {
+    setKnowledgeDocuments(
+      await request<KnowledgeDocument[]>(`/api/products/${productId}/documents`),
+    );
+  };
+  const openGenerate = async () => {
+    if (!selected) return;
+    setDialog("generate");
+    setError("");
+    try {
+      await loadKnowledgeDocuments(selected.id);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+  const uploadKnowledge = async () => {
+    if (!selected || !knowledgeFile) return;
+    setBusy(true);
+    setError("");
+    try {
+      const data = new FormData();
+      data.append("file", knowledgeFile);
+      data.append("productId", selected.id);
+      const response = await fetch(`${API}/api/documents`, {
+        method: "POST",
+        credentials: "include",
+        body: data,
+      });
+      if (!response.ok) {
+        const problem = await response.json().catch(() => null);
+        throw new Error(problem?.detail ?? "Knowledge upload failed.");
+      }
+      await loadKnowledgeDocuments(selected.id);
+      setKnowledgeFile(null);
+      setUseRag(true);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const deleteKnowledge = async (document: KnowledgeDocument) => {
+    if (!selected || !window.confirm(`Remove ${document.fileName} from this product's knowledge?`))
+      return;
+    setBusy(true);
+    setError("");
+    try {
+      await request<void>(
+        `/api/products/${selected.id}/documents/${document.id}`,
+        { method: "DELETE" },
+      );
+      await loadKnowledgeDocuments(selected.id);
+      if (knowledgeDocuments.length <= 1) setUseRag(false);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
   const generate = async () => {
     if (!selected) return;
     setBusy(true);
@@ -272,11 +355,12 @@ function App() {
         {
           method: "POST",
           headers: { "Idempotency-Key": crypto.randomUUID() },
-          body: JSON.stringify({ language }),
+          body: JSON.stringify({ language, useRag, topK }),
         },
       );
       await loadDrafts(selected.id);
       setDraftId(created.id);
+      setDialog(null);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -546,6 +630,18 @@ function App() {
       tokens: (run?.inputTokens ?? 0) + (run?.outputTokens ?? 0),
       runStatus: run?.status ?? "Loading",
       trace: run?.correlationId ?? "",
+      grounding: run?.groundingMode === "Rag" ? "RAG" : "Facts only",
+      topK: run?.groundingMode === "Rag"
+        ? `${run.requestedTopK ?? "—"} requested → ${run.retrievedChunkCount} returned`
+        : "—",
+      evidence: run?.groundingMode === "Rag"
+        ? run.retrievalStatus === "Succeeded"
+          ? `${run.retrievedChunkCount} chunks · ${run.retrievedDocumentCount} docs`
+              + (run.retrievalSources?.length
+                ? ` · ${[...new Set(run.retrievalSources.map((source) => source.fileName))].join(", ")}`
+                : "")
+          : run.retrievalErrorCode ?? run.retrievalStatus
+        : "Not requested",
     };
   });
   const modelAuditColumns: ColumnDef<ModelAuditRow>[] = [
@@ -554,6 +650,12 @@ function App() {
     { accessorKey: "startedAt", header: "Started", meta: { label: "Started" }, cell: ({ row }) => row.original.startedAt ? new Date(row.original.startedAt).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : "Loading…" },
     { accessorKey: "model", header: "Model", meta: { label: "Model" }, cell: ({ row }) => row.original.model || "—" },
     { accessorKey: "promptVersion", header: "Prompt", meta: { label: "Prompt" }, cell: ({ row }) => row.original.promptVersion || "—" },
+    { accessorKey: "grounding", header: "Grounding", meta: { label: "Grounding" }, cell: ({ row }) => <Badge variant={row.original.grounding === "RAG" ? "default" : "outline"}>{row.original.grounding}</Badge> },
+    { accessorKey: "topK", header: "Top-K", meta: { label: "Top-K" } },
+    { accessorKey: "evidence", header: "Evidence", meta: { label: "Evidence" }, cell: ({ row }) => {
+      const run = row.original.run;
+      return <span title={run?.retrievalSources?.map((x) => `${x.citation} (${x.score.toFixed(3)})`).join("\n")}>{row.original.evidence}</span>;
+    } },
     { accessorKey: "latencyMs", header: "Latency", meta: { label: "Latency" }, cell: ({ row }) => row.original.latencyMs ? `${(row.original.latencyMs / 1000).toFixed(1)}s` : "—" },
     { accessorKey: "tokens", header: "Tokens", meta: { label: "Tokens" }, cell: ({ row }) => row.original.tokens || "—" },
     { accessorKey: "runStatus", header: "Run status", meta: { label: "Run status" }, cell: ({ row }) => row.original.run ? <Badge variant={row.original.runStatus === "Succeeded" ? "secondary" : row.original.runStatus === "Failed" ? "destructive" : "outline"}>{row.original.runStatus}</Badge> : "—" },
@@ -797,7 +899,7 @@ function App() {
                     <option value="de">Deutsch</option>
                     <option value="en">English</option>
                   </NativeSelect>
-                  <Button onClick={generate} disabled={busy}>
+                  <Button onClick={openGenerate} disabled={busy}>
                     <Sparkles aria-hidden="true" />
                     {busy ? "Generating…" : "New draft"}
                   </Button>
@@ -1030,9 +1132,9 @@ function App() {
         open={dialog !== null}
         onOpenChange={(open) => !open && !busy && setDialog(null)}
       >
-        <DialogContent className="modal">
+        <DialogContent className="max-h-[calc(100dvh-2rem)] max-w-2xl overflow-y-auto">
             {dialog === "catalog" ? (
-              <form onSubmit={createCatalog}>
+              <form className="grid gap-4" onSubmit={createCatalog}>
                 <DialogHeader>
                   <p className="eyebrow">Organization</p>
                   <DialogTitle>Create catalog</DialogTitle>
@@ -1076,7 +1178,7 @@ function App() {
                 </DialogFooter>
               </form>
             ) : dialog === "product" ? (
-              <form onSubmit={createProduct}>
+              <form className="grid gap-4" onSubmit={createProduct}>
                 <DialogHeader>
                   <p className="eyebrow">{activeCatalog?.name}</p>
                   <DialogTitle>Add product</DialogTitle>
@@ -1084,7 +1186,7 @@ function App() {
                     Add trustworthy facts before generating product content.
                   </DialogDescription>
                 </DialogHeader>
-                <div className="form-grid">
+                <div className="grid gap-3 sm:grid-cols-2">
                   <Label className="form-field">
                     <span>SKU</span>
                     <Input
@@ -1144,6 +1246,63 @@ function App() {
                   </Button>
                 </DialogFooter>
               </form>
+            ) : dialog === "generate" ? (
+              <div className="grid gap-5">
+                <DialogHeader>
+                  <p className="eyebrow">{selected?.sku} · {language.toUpperCase()}</p>
+                  <DialogTitle>Generate product draft</DialogTitle>
+                  <DialogDescription>
+                    Choose whether Ollama uses only verified product facts or also retrieves product-scoped knowledge.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="grid gap-3 sm:grid-cols-2" role="radiogroup" aria-label="Grounding mode">
+                  <Label className={!useRag ? "flex cursor-pointer items-start gap-3 rounded-lg border border-primary bg-primary/5 p-4 ring-1 ring-primary" : "flex cursor-pointer items-start gap-3 rounded-lg border bg-background p-4"}>
+                    <input className="mt-0.5 size-4 accent-primary" type="radio" name="grounding" checked={!useRag} onChange={() => setUseRag(false)} />
+                    <span className="grid gap-1"><strong>Facts only</strong><small className="font-normal text-muted-foreground">Use the structured product record. Fast and predictable.</small></span>
+                  </Label>
+                  <Label className={useRag ? "flex cursor-pointer items-start gap-3 rounded-lg border border-primary bg-primary/5 p-4 ring-1 ring-primary" : "flex cursor-pointer items-start gap-3 rounded-lg border bg-background p-4"}>
+                    <input className="mt-0.5 size-4 accent-primary" type="radio" name="grounding" checked={useRag} onChange={() => setUseRag(true)} />
+                    <span className="grid gap-1"><strong>Facts + knowledge (RAG)</strong><small className="font-normal text-muted-foreground">Retrieve relevant excerpts from this product’s uploaded documents.</small></span>
+                  </Label>
+                </div>
+                {useRag && (
+                  <Label className="grid gap-2 rounded-lg border bg-muted/50 p-3">
+                    <span className="flex items-center justify-between gap-3"><strong>Top-K chunks</strong><small className="font-normal text-muted-foreground">1–20 · default 5</small></span>
+                    <Input type="number" min={1} max={20} step={1} value={topK} onChange={(event) => setTopK(Math.min(20, Math.max(1, Number(event.target.value) || 1)))} />
+                    <small className="font-normal text-muted-foreground">
+                      Top-{topK} means Qdrant will add at most the {topK} most relevant {topK === 1 ? "chunk" : "chunks"} to the model prompt. If fewer matches exist, it returns fewer. Higher values increase context, tokens, and latency and may improve coverage, but too many chunks can add noise. Lower values are faster but may miss useful passages.
+                    </small>
+                  </Label>
+                )}
+                <div className="grid gap-3 rounded-lg border bg-card p-4 shadow-sm">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="grid gap-1"><strong>Product knowledge</strong><small className="font-normal text-muted-foreground">{knowledgeDocuments.length} uploaded document{knowledgeDocuments.length === 1 ? "" : "s"}</small></div>
+                    <Badge variant="outline">Product scoped</Badge>
+                  </div>
+                  {knowledgeDocuments.length > 0 && (
+                    <div className="grid max-h-32 gap-2 overflow-y-auto">
+                      {knowledgeDocuments.map((document) => (
+                        <div className="flex items-center gap-3 rounded-md border bg-muted/50 p-2" key={document.id}>
+                          <span className="min-w-0 flex-1 truncate">{document.fileName}</span>
+                          <small className="whitespace-nowrap font-normal text-muted-foreground">{document.chunkCount} chunks</small>
+                          <Button type="button" size="icon" variant="ghost" disabled={busy} aria-label={`Remove ${document.fileName}`} onClick={() => deleteKnowledge(document)}><Trash2 aria-hidden="true" /></Button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <div className="grid gap-3 border-t pt-3">
+                    <Label className="form-field">
+                      <span>Upload product instructions</span>
+                      <Input type="file" accept=".txt,.md,.pdf" onChange={(event) => setKnowledgeFile(event.target.files?.[0] ?? null)} />
+                    </Label>
+                    <Button type="button" variant="outline" disabled={busy || !knowledgeFile} onClick={uploadKnowledge}><Upload aria-hidden="true" />{busy ? "Processing…" : "Upload and index"}</Button>
+                  </div>
+                </div>
+                <DialogFooter>
+                  <Button type="button" variant="outline" onClick={() => setDialog(null)} disabled={busy}>Cancel</Button>
+                  <Button type="button" disabled={busy || (useRag && knowledgeDocuments.length === 0)} onClick={generate}><Sparkles aria-hidden="true" />{busy ? "Generating…" : useRag ? "Generate with RAG" : "Generate from facts"}</Button>
+                </DialogFooter>
+              </div>
             ) : null}
         </DialogContent>
       </Dialog>

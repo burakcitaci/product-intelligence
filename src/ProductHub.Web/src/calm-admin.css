@@ -222,21 +222,6 @@
   font-weight: 400;
 }
 
-[data-slot="dialog-content"].modal {
-  width: min(560px, calc(100% - 2rem));
-  padding: 28px;
-}
-
-[data-slot="dialog-content"].modal form {
-  display: grid;
-  gap: 16px;
-}
-
-[data-slot="dialog-content"].modal h2 {
-  margin: 0;
-  font-size: 24px;
-}
-
 [data-slot="dialog-footer"] {
   margin-top: 6px;
 }

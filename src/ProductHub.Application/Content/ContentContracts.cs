@@ -6,7 +6,9 @@ public sealed record GenerateDraftCommand(
     Guid ProductId,
     string Language,
     string IdempotencyKey,
-    string CorrelationId
+    string CorrelationId,
+    bool UseRag = false,
+    int TopK = 5
 );
 
 public sealed record UpdateDraftCommand(
@@ -42,7 +44,22 @@ public sealed record AiGenerationMetadataDto(
     int? OutputTokens,
     string Status,
     string? ErrorCode,
-    string CorrelationId
+    string CorrelationId,
+    string GroundingMode,
+    int? RequestedTopK,
+    string RetrievalStatus,
+    long? RetrievalDurationMs,
+    int RetrievedChunkCount,
+    int RetrievedDocumentCount,
+    IReadOnlyList<RetrievalSourceDto> RetrievalSources,
+    string? RetrievalErrorCode
+);
+
+public sealed record RetrievalSourceDto(
+    Guid DocumentId,
+    string FileName,
+    string Citation,
+    float Score
 );
 
 public sealed class NotFoundException(string message) : Exception(message);

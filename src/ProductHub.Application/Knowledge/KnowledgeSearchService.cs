@@ -28,7 +28,12 @@ public sealed class KnowledgeSearchService(
         var vector = (
             await embeddings.GenerateAsync([query.Query.Trim()], cancellationToken)
         ).Single();
-        var hits = await vectors.SearchAsync(vector, query.Limit, cancellationToken);
+        var hits = await vectors.SearchAsync(
+            vector,
+            query.Limit,
+            query.ProductId,
+            cancellationToken
+        );
         var chunks = await store.GetChunksAsync(hits.Select(x => x.Id), cancellationToken);
         return hits.Where(x => chunks.ContainsKey(x.Id))
             .Select(hit =>

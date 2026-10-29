@@ -7,5 +7,5 @@ public sealed class AiSettings
     public string Model { get; init; } = "qwen3:8b";
     public Uri Endpoint { get; init; } = new("http://localhost:11434");
     public int TimeoutSeconds { get; init; } = 120;
-    public string PromptVersion { get; init; } = "product-description-v1";
+    public string PromptVersion { get; init; } = "product-description-v2";
 }

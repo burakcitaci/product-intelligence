@@ -15,6 +15,16 @@ internal sealed class KnowledgeDocumentStore(ProductHubDbContext db) : IKnowledg
     public Task<KnowledgeDocument?> GetAsync(Guid id, CancellationToken ct) =>
         db.KnowledgeDocuments.Include(x => x.Chunks).SingleOrDefaultAsync(x => x.Id == id, ct);
 
+    public async Task<IReadOnlyList<KnowledgeDocument>> ListAsync(
+        Guid productId,
+        CancellationToken ct
+    ) =>
+        await db
+            .KnowledgeDocuments.Include(x => x.Chunks)
+            .Where(x => x.ProductId == productId)
+            .OrderByDescending(x => x.CreatedAt)
+            .ToArrayAsync(ct);
+
     public async Task<IReadOnlyDictionary<Guid, DocumentChunk>> GetChunksAsync(
         IEnumerable<Guid> ids,
         CancellationToken ct
@@ -27,8 +37,10 @@ internal sealed class KnowledgeDocumentStore(ProductHubDbContext db) : IKnowledg
             .ToDictionaryAsync(x => x.Id, ct);
     }
 
-    public Task<bool> ExistsByHashAsync(string hash, CancellationToken ct) =>
-        db.KnowledgeDocuments.AnyAsync(x => x.Sha256 == hash, ct);
+    public Task<bool> ExistsByHashAsync(Guid productId, string hash, CancellationToken ct) =>
+        db.KnowledgeDocuments.AnyAsync(x => x.ProductId == productId && x.Sha256 == hash, ct);
+
+    public void Remove(KnowledgeDocument document) => db.KnowledgeDocuments.Remove(document);
 
     public Task SaveChangesAsync(CancellationToken ct) => db.SaveChangesAsync(ct);
 }

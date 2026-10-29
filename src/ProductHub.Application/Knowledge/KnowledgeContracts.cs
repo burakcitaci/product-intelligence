@@ -2,10 +2,16 @@ using ProductHub.Domain.Knowledge;
 
 namespace ProductHub.Application.Knowledge;
 
-public sealed record IngestDocumentCommand(string FileName, string ContentType, byte[] Content);
+public sealed record IngestDocumentCommand(
+    Guid ProductId,
+    string FileName,
+    string ContentType,
+    byte[] Content
+);
 
 public sealed record DocumentDto(
     Guid Id,
+    Guid? ProductId,
     string FileName,
     string ContentType,
     DocumentIngestionStatus Status,
@@ -15,7 +21,7 @@ public sealed record DocumentDto(
     string? ErrorCode
 );
 
-public sealed record SearchKnowledgeQuery(string Query, int Limit = 5);
+public sealed record SearchKnowledgeQuery(string Query, int Limit = 5, Guid? ProductId = null);
 
 public sealed record KnowledgeSearchResult(
     Guid DocumentId,
@@ -32,6 +38,7 @@ public sealed record ExtractedDocument(string Text);
 public sealed record VectorDocument(
     Guid Id,
     Guid DocumentId,
+    Guid? ProductId,
     int Ordinal,
     string Text,
     ReadOnlyMemory<float> Vector
@@ -60,9 +67,11 @@ public interface ITextEmbeddingGenerator
 public interface IVectorStore
 {
     Task UpsertAsync(IReadOnlyList<VectorDocument> documents, CancellationToken cancellationToken);
+    Task DeleteDocumentAsync(Guid documentId, CancellationToken cancellationToken);
     Task<IReadOnlyList<VectorSearchHit>> SearchAsync(
         ReadOnlyMemory<float> vector,
         int limit,
+        Guid? productId,
         CancellationToken cancellationToken
     );
 }

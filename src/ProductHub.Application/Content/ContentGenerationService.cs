@@ -1,6 +1,9 @@
+using System.Diagnostics;
+using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using ProductHub.Application.Abstractions;
+using ProductHub.Application.Knowledge;
 using ProductHub.Application.Products;
 using ProductHub.Domain.Content;
 
@@ -10,7 +13,8 @@ public sealed class ContentGenerationService(
     IContentGenerationStore store,
     IContentGenerator generator,
     IOptions<AiSettings> settings,
-    ILogger<ContentGenerationService> logger
+    ILogger<ContentGenerationService> logger,
+    KnowledgeSearchService? knowledgeSearch = null
 )
 {
     public async Task<ContentDraftDto> GenerateAsync(
@@ -53,7 +57,9 @@ public sealed class ContentGenerationService(
             options.Model,
             options.PromptVersion,
             NormalizeLanguage(command.Language),
-            command.CorrelationId
+            command.UseRag ? GroundingMode.Rag : GroundingMode.FactsOnly,
+            command.CorrelationId,
+            command.UseRag ? command.TopK : null
         );
         await store.AddGenerationAsync(generation, cancellationToken);
         try
@@ -67,11 +73,79 @@ public sealed class ContentGenerationService(
 
         try
         {
+            IReadOnlyList<KnowledgeSearchResult> knowledge = [];
+            if (command.UseRag)
+            {
+                if (knowledgeSearch is null)
+                    throw new ContentGenerationException(
+                        "rag-not-configured",
+                        "Knowledge retrieval is not configured."
+                    );
+                var retrieval = Stopwatch.StartNew();
+                try
+                {
+                    var query = string.Join(
+                        " | ",
+                        new[] { product.Sku, product.Name, product.Brand }.Concat(
+                            product.Attributes.Select(x => $"{x.Name}: {x.Value} {x.Unit}")
+                        )
+                    );
+                    knowledge = await knowledgeSearch.SearchAsync(
+                        new SearchKnowledgeQuery(query, command.TopK, product.Id),
+                        cancellationToken
+                    );
+                    retrieval.Stop();
+                    if (knowledge.Count == 0)
+                    {
+                        generation.RecordRetrievalFailure(
+                            retrieval.ElapsedMilliseconds,
+                            "rag-no-context"
+                        );
+                        throw new ContentGenerationException(
+                            "rag-no-context",
+                            "No completed knowledge document matched this product. Upload product knowledge or generate with facts only."
+                        );
+                    }
+                    var sources = knowledge
+                        .Select(x => new RetrievalSourceDto(
+                            x.DocumentId,
+                            x.FileName,
+                            x.Citation,
+                            x.Score
+                        ))
+                        .ToArray();
+                    generation.RecordRetrieval(
+                        retrieval.ElapsedMilliseconds,
+                        knowledge.Count,
+                        knowledge.Select(x => x.DocumentId).Distinct().Count(),
+                        JsonSerializer.Serialize(sources)
+                    );
+                    await store.SaveChangesAsync(cancellationToken);
+                }
+                catch (ContentGenerationException)
+                {
+                    throw;
+                }
+                catch (Exception exception) when (exception is not OperationCanceledException)
+                {
+                    retrieval.Stop();
+                    generation.RecordRetrievalFailure(
+                        retrieval.ElapsedMilliseconds,
+                        "rag-retrieval-failed"
+                    );
+                    throw new ContentGenerationException(
+                        "rag-retrieval-failed",
+                        "Knowledge retrieval failed; the draft was not generated.",
+                        exception
+                    );
+                }
+            }
             var context = new ProductContentContext(
                 product.Sku,
                 product.Name,
                 product.Brand,
-                product.Attributes.Select(x => new ProductFact(x.Name, x.Value, x.Unit)).ToArray()
+                product.Attributes.Select(x => new ProductFact(x.Name, x.Value, x.Unit)).ToArray(),
+                knowledge.Select(x => new GroundingExcerpt(x.Citation, x.Text)).ToArray()
             );
             var generated = await generator.GenerateAsync(
                 context,
@@ -248,7 +322,15 @@ public sealed class ContentGenerationService(
             generation.OutputTokens,
             generation.Status.ToString(),
             generation.ErrorCode,
-            generation.CorrelationId
+            generation.CorrelationId,
+            generation.GroundingMode.ToString(),
+            generation.RequestedTopK,
+            generation.RetrievalStatus.ToString(),
+            generation.RetrievalDurationMs,
+            generation.RetrievedChunkCount,
+            generation.RetrievedDocumentCount,
+            DeserializeSources(generation.RetrievedSourcesJson),
+            generation.RetrievalErrorCode
         );
     }
 
@@ -285,6 +367,8 @@ public sealed class ContentGenerationService(
             ];
         if (command.Language?.Trim().ToLowerInvariant() is not ("de" or "en"))
             errors["language"] = ["Language must be 'de' or 'en'."];
+        if (command.UseRag && command.TopK is < 1 or > 20)
+            errors["topK"] = ["Top-K must be between 1 and 20."];
         if (errors.Count > 0)
             throw new ValidationException(errors);
     }
@@ -342,6 +426,11 @@ public sealed class ContentGenerationService(
     }
 
     private static string NormalizeLanguage(string language) => language.Trim().ToLowerInvariant();
+
+    private static IReadOnlyList<RetrievalSourceDto> DeserializeSources(string? json) =>
+        string.IsNullOrWhiteSpace(json)
+            ? []
+            : JsonSerializer.Deserialize<RetrievalSourceDto[]>(json) ?? [];
 
     private static ContentDraftDto Map(ContentDraft draft) =>
         new(

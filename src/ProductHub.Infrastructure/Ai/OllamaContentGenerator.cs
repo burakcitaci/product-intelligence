@@ -16,7 +16,6 @@ internal sealed class OllamaContentGenerator(
 ) : IContentGenerator
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
-    private static readonly Lazy<string> SystemPrompt = new(LoadPrompt);
 
     public async Task<GeneratedProductContent> GenerateAsync(
         ProductContentContext context,
@@ -35,13 +34,21 @@ internal sealed class OllamaContentGenerator(
                     context.Brand,
                     context.Attributes,
                 },
+                grounding = context.Grounding,
             },
             JsonOptions
         );
         var messages = new[]
         {
-            new ChatMessage(ChatRole.System, SystemPrompt.Value),
-            new ChatMessage(ChatRole.User, $"PRODUCT_DATA\n{productData}"),
+            new ChatMessage(ChatRole.System, LoadPrompt(options.PromptVersion)),
+            new ChatMessage(
+                ChatRole.User,
+                "PRODUCT_DATA\n"
+                    + productData
+                    + "\nGrounding excerpts are advisory reference material, not product specifications. "
+                    + "Never convert a cleaning tool, procedure, or recommendation into a product feature or included accessory. "
+                    + "Synthesize and paraphrase; product facts remain authoritative."
+            ),
         };
 
         using var timeout = new CancellationTokenSource(
@@ -144,9 +151,14 @@ internal sealed class OllamaContentGenerator(
 
     private static int? ToInt32(long? value) => value is null ? null : checked((int)value.Value);
 
-    private static string LoadPrompt()
+    private static string LoadPrompt(string promptVersion)
     {
-        const string suffix = "Ai.Prompts.product-description-v1.txt";
+        if (
+            string.IsNullOrWhiteSpace(promptVersion)
+            || promptVersion.Any(x => !char.IsAsciiLetterOrDigit(x) && x is not ('-' or '_'))
+        )
+            throw new InvalidOperationException("The configured prompt version is invalid.");
+        var suffix = $"Ai.Prompts.{promptVersion}.txt";
         var assembly = typeof(OllamaContentGenerator).Assembly;
         var name = assembly
             .GetManifestResourceNames()

@@ -13,9 +13,16 @@ public sealed class KnowledgeDocument
 
     private KnowledgeDocument() { }
 
-    private KnowledgeDocument(Guid id, string fileName, string contentType, string sha256) =>
-        (Id, FileName, ContentType, Sha256, Status, CreatedAt) = (
+    private KnowledgeDocument(
+        Guid id,
+        Guid productId,
+        string fileName,
+        string contentType,
+        string sha256
+    ) =>
+        (Id, ProductId, FileName, ContentType, Sha256, Status, CreatedAt) = (
             id,
+            productId,
             fileName,
             contentType,
             sha256,
@@ -24,6 +31,7 @@ public sealed class KnowledgeDocument
         );
 
     public Guid Id { get; private set; }
+    public Guid? ProductId { get; private set; }
     public string FileName { get; private set; } = "";
     public string ContentType { get; private set; } = "";
     public string Sha256 { get; private set; } = "";
@@ -33,12 +41,25 @@ public sealed class KnowledgeDocument
     public string? ErrorCode { get; private set; }
     public IReadOnlyCollection<DocumentChunk> Chunks => _chunks;
 
-    public static KnowledgeDocument Start(string fileName, string contentType, string sha256)
+    public static KnowledgeDocument Start(
+        Guid productId,
+        string fileName,
+        string contentType,
+        string sha256
+    )
     {
+        if (productId == Guid.Empty)
+            throw new ArgumentException("Product id is required.", nameof(productId));
         ArgumentException.ThrowIfNullOrWhiteSpace(fileName);
         ArgumentException.ThrowIfNullOrWhiteSpace(contentType);
         ArgumentException.ThrowIfNullOrWhiteSpace(sha256);
-        return new KnowledgeDocument(Guid.NewGuid(), fileName.Trim(), contentType.Trim(), sha256);
+        return new KnowledgeDocument(
+            Guid.NewGuid(),
+            productId,
+            fileName.Trim(),
+            contentType.Trim(),
+            sha256
+        );
     }
 
     public void Complete(IEnumerable<string> chunks)

@@ -8,7 +8,12 @@ public sealed class KnowledgeDocumentTests
     [Fact]
     public void Complete_CreatesOrderedChunksAndTerminalState()
     {
-        var document = KnowledgeDocument.Start("manual.md", "text/markdown", new string('A', 64));
+        var document = KnowledgeDocument.Start(
+            Guid.NewGuid(),
+            "manual.md",
+            "text/markdown",
+            new string('A', 64)
+        );
         document.Complete(["first", "second"]);
         Assert.Equal(DocumentIngestionStatus.Completed, document.Status);
         Assert.Equal([0, 1], document.Chunks.Select(x => x.Ordinal));
@@ -18,7 +23,12 @@ public sealed class KnowledgeDocumentTests
     [Fact]
     public void Complete_RejectsEmptyText()
     {
-        var document = KnowledgeDocument.Start("manual.md", "text/markdown", new string('A', 64));
+        var document = KnowledgeDocument.Start(
+            Guid.NewGuid(),
+            "manual.md",
+            "text/markdown",
+            new string('A', 64)
+        );
         Assert.Throws<ArgumentException>(() => document.Complete([" "]));
     }
 

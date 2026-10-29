@@ -14,6 +14,7 @@
 
   <ItemGroup>
     <EmbeddedResource Include="Ai\Prompts\product-description-v1.txt" />
+    <EmbeddedResource Include="Ai\Prompts\product-description-v2.txt" />
   </ItemGroup>
 
   <ItemGroup>

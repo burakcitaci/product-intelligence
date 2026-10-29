@@ -123,6 +123,12 @@ namespace ProductHub.Infrastructure.Persistence.Migrations
                         .IsUnicode(false)
                         .HasColumnType("varchar(100)");
 
+                    b.Property<string>("GroundingMode")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(30)");
+
                     b.Property<long?>("DurationMs")
                         .HasColumnType("bigint");
 
@@ -153,6 +159,32 @@ namespace ProductHub.Infrastructure.Persistence.Migrations
 
                     b.Property<int?>("OutputTokens")
                         .HasColumnType("int");
+
+                    b.Property<int?>("RequestedTopK")
+                        .HasColumnType("int");
+
+                    b.Property<int>("RetrievedChunkCount")
+                        .HasColumnType("int");
+
+                    b.Property<int>("RetrievedDocumentCount")
+                        .HasColumnType("int");
+
+                    b.Property<string>("RetrievedSourcesJson")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<long?>("RetrievalDurationMs")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("RetrievalErrorCode")
+                        .HasMaxLength(100)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(100)");
+
+                    b.Property<string>("RetrievalStatus")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(30)");
 
                     b.Property<Guid>("ProductId")
                         .HasColumnType("uniqueidentifier");
@@ -305,6 +337,9 @@ namespace ProductHub.Infrastructure.Persistence.Migrations
                         .HasMaxLength(260)
                         .HasColumnType("nvarchar(260)");
 
+                    b.Property<Guid?>("ProductId")
+                        .HasColumnType("uniqueidentifier");
+
                     b.Property<string>("Sha256")
                         .IsRequired()
                         .HasMaxLength(64)
@@ -317,8 +352,11 @@ namespace ProductHub.Infrastructure.Persistence.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("Sha256")
-                        .IsUnique();
+                    b.HasIndex("ProductId", "Sha256")
+                        .IsUnique()
+                        .HasFilter("[ProductId] IS NOT NULL");
+
+                    b.HasIndex("ProductId", "CreatedAt");
 
                     b.ToTable("KnowledgeDocuments", (string)null);
                 });
@@ -472,6 +510,11 @@ namespace ProductHub.Infrastructure.Persistence.Migrations
 
             modelBuilder.Entity("ProductHub.Domain.Knowledge.KnowledgeDocument", b =>
                 {
+                    b.HasOne("ProductHub.Domain.Products.Product", null)
+                        .WithMany()
+                        .HasForeignKey("ProductId")
+                        .OnDelete(DeleteBehavior.Cascade);
+
                     b.Navigation("Chunks");
                 });
 #pragma warning restore 612, 618

@@ -24,9 +24,14 @@ public sealed class DocumentIngestionService(
     {
         Validate(command);
         var hash = Convert.ToHexString(SHA256.HashData(command.Content));
-        if (await store.ExistsByHashAsync(hash, cancellationToken))
-            throw new ConflictException("This document content has already been ingested.");
-        var document = KnowledgeDocument.Start(command.FileName, command.ContentType, hash);
+        if (await store.ExistsByHashAsync(command.ProductId, hash, cancellationToken))
+            throw new ConflictException("This document is already attached to this product.");
+        var document = KnowledgeDocument.Start(
+            command.ProductId,
+            command.FileName,
+            command.ContentType,
+            hash
+        );
         await store.AddAsync(document, cancellationToken);
         await store.SaveChangesAsync(cancellationToken);
         try
@@ -58,6 +63,7 @@ public sealed class DocumentIngestionService(
                             new VectorDocument(
                                 chunk.Id,
                                 document.Id,
+                                document.ProductId,
                                 chunk.Ordinal,
                                 chunk.Text,
                                 vector
@@ -96,6 +102,28 @@ public sealed class DocumentIngestionService(
                 ?? throw new NotFoundException($"Document '{id}' was not found.")
         );
 
+    public async Task<IReadOnlyList<DocumentDto>> ListAsync(
+        Guid productId,
+        CancellationToken cancellationToken
+    ) => (await store.ListAsync(productId, cancellationToken)).Select(Map).ToArray();
+
+    public async Task DeleteAsync(
+        Guid productId,
+        Guid documentId,
+        CancellationToken cancellationToken
+    )
+    {
+        var document =
+            await store.GetAsync(documentId, cancellationToken)
+            ?? throw new NotFoundException($"Document '{documentId}' was not found.");
+        if (document.ProductId != productId)
+            throw new NotFoundException($"Document '{documentId}' was not found for this product.");
+
+        await vectors.DeleteDocumentAsync(document.Id, cancellationToken);
+        store.Remove(document);
+        await store.SaveChangesAsync(cancellationToken);
+    }
+
     public static IReadOnlyList<string> Chunk(string text, int size, int overlap)
     {
         if (string.IsNullOrWhiteSpace(text))
@@ -127,6 +155,8 @@ public sealed class DocumentIngestionService(
     private void Validate(IngestDocumentCommand command)
     {
         var errors = new Dictionary<string, string[]>();
+        if (command.ProductId == Guid.Empty)
+            errors["productId"] = ["Product id is required."];
         if (string.IsNullOrWhiteSpace(command.FileName) || command.FileName.Length > 260)
             errors["fileName"] = ["A file name up to 260 characters is required."];
         if (string.IsNullOrWhiteSpace(command.ContentType) || command.ContentType.Length > 100)
@@ -160,6 +190,7 @@ public sealed class DocumentIngestionService(
     private static DocumentDto Map(KnowledgeDocument x) =>
         new(
             x.Id,
+            x.ProductId,
             x.FileName,
             x.ContentType,
             x.Status,

@@ -26,7 +26,9 @@ public sealed class ContentDraftsController(ContentGenerationService service) : 
                 productId,
                 request.Language ?? "de",
                 idempotencyKey ?? "",
-                HttpContext.TraceIdentifier
+                HttpContext.TraceIdentifier,
+                request.UseRag,
+                request.TopK
             ),
             cancellationToken
         );
@@ -85,7 +87,11 @@ public sealed class ContentDraftsController(ContentGenerationService service) : 
         );
 }
 
-public sealed record GenerateDraftRequest(string? Language = "de");
+public sealed record GenerateDraftRequest(
+    string? Language = "de",
+    bool UseRag = false,
+    int TopK = 5
+);
 
 public sealed record UpdateDraftRequest(
     string Title,

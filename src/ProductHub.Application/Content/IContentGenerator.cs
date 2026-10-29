@@ -13,8 +13,11 @@ public sealed record ProductContentContext(
     string Sku,
     string Name,
     string Brand,
-    IReadOnlyList<ProductFact> Attributes
+    IReadOnlyList<ProductFact> Attributes,
+    IReadOnlyList<GroundingExcerpt> Grounding
 );
+
+public sealed record GroundingExcerpt(string Citation, string Text);
 
 public sealed record ProductFact(string Name, string Value, string? Unit);
 

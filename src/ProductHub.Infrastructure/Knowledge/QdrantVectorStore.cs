@@ -20,7 +20,12 @@ internal sealed class QdrantVectorStore(HttpClient client, IOptions<RagSettings>
         {
             id = x.Id,
             vector = x.Vector.ToArray(),
-            payload = new { documentId = x.DocumentId, ordinal = x.Ordinal },
+            payload = new
+            {
+                documentId = x.DocumentId,
+                productId = x.ProductId,
+                ordinal = x.Ordinal,
+            },
         });
         using var response = await client.PutAsJsonAsync(
             $"collections/{settings.Value.CollectionName}/points?wait=true",
@@ -30,9 +35,27 @@ internal sealed class QdrantVectorStore(HttpClient client, IOptions<RagSettings>
         await EnsureSuccessAsync(response, "qdrant-upsert-failed", ct);
     }
 
+    public async Task DeleteDocumentAsync(Guid documentId, CancellationToken ct)
+    {
+        await EnsureCollectionAsync(ct);
+        using var response = await client.PostAsJsonAsync(
+            $"collections/{settings.Value.CollectionName}/points/delete?wait=true",
+            new
+            {
+                filter = new
+                {
+                    must = new[] { new { key = "documentId", match = new { value = documentId } } },
+                },
+            },
+            ct
+        );
+        await EnsureSuccessAsync(response, "qdrant-delete-failed", ct);
+    }
+
     public async Task<IReadOnlyList<VectorSearchHit>> SearchAsync(
         ReadOnlyMemory<float> vector,
         int limit,
+        Guid? productId,
         CancellationToken ct
     )
     {
@@ -44,6 +67,15 @@ internal sealed class QdrantVectorStore(HttpClient client, IOptions<RagSettings>
                 query = vector.ToArray(),
                 limit,
                 with_payload = false,
+                filter = productId is null
+                    ? null
+                    : new
+                    {
+                        must = new[]
+                        {
+                            new { key = "productId", match = new { value = productId.Value } },
+                        },
+                    },
             },
             ct
         );

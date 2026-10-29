@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 using ProductHub.Domain.Knowledge;
+using ProductHub.Domain.Products;
 
 namespace ProductHub.Infrastructure.Persistence;
 
@@ -10,10 +11,15 @@ internal sealed class KnowledgeDocumentConfiguration : IEntityTypeConfiguration<
     {
         b.ToTable("KnowledgeDocuments");
         b.HasKey(x => x.Id);
+        b.HasOne<Product>()
+            .WithMany()
+            .HasForeignKey(x => x.ProductId)
+            .OnDelete(DeleteBehavior.Cascade);
         b.Property(x => x.FileName).HasMaxLength(260).IsRequired();
         b.Property(x => x.ContentType).HasMaxLength(100).IsRequired();
         b.Property(x => x.Sha256).HasMaxLength(64).IsRequired();
-        b.HasIndex(x => x.Sha256).IsUnique();
+        b.HasIndex(x => new { x.ProductId, x.CreatedAt });
+        b.HasIndex(x => new { x.ProductId, x.Sha256 }).IsUnique();
         b.Property(x => x.Status).HasConversion<string>().HasMaxLength(30);
         b.Property(x => x.ErrorCode).HasMaxLength(100);
         b.HasMany(x => x.Chunks)

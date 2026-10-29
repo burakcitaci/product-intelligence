@@ -7,6 +7,19 @@ public enum AiGenerationStatus
     Failed,
 }
 
+public enum GroundingMode
+{
+    FactsOnly,
+    Rag,
+}
+
+public enum RetrievalStatus
+{
+    NotRequested,
+    Succeeded,
+    Failed,
+}
+
 public sealed class AiGeneration
 {
     private AiGeneration() { }
@@ -19,7 +32,9 @@ public sealed class AiGeneration
         string model,
         string promptVersion,
         string language,
+        GroundingMode groundingMode,
         string correlationId,
+        int? requestedTopK,
         DateTimeOffset startedAt
     )
     {
@@ -30,6 +45,9 @@ public sealed class AiGeneration
         Model = Required(model, nameof(model), 100);
         PromptVersion = Required(promptVersion, nameof(promptVersion), 100);
         Language = Required(language, nameof(language), 10);
+        GroundingMode = groundingMode;
+        RequestedTopK = groundingMode == GroundingMode.Rag ? requestedTopK : null;
+        RetrievalStatus = RetrievalStatus.NotRequested;
         CorrelationId = Required(correlationId, nameof(correlationId), 100);
         StartedAt = startedAt;
         Status = AiGenerationStatus.InProgress;
@@ -42,6 +60,14 @@ public sealed class AiGeneration
     public string Model { get; private set; } = null!;
     public string PromptVersion { get; private set; } = null!;
     public string Language { get; private set; } = null!;
+    public GroundingMode GroundingMode { get; private set; }
+    public int? RequestedTopK { get; private set; }
+    public RetrievalStatus RetrievalStatus { get; private set; }
+    public long? RetrievalDurationMs { get; private set; }
+    public int RetrievedChunkCount { get; private set; }
+    public int RetrievedDocumentCount { get; private set; }
+    public string? RetrievedSourcesJson { get; private set; }
+    public string? RetrievalErrorCode { get; private set; }
     public DateTimeOffset StartedAt { get; private set; }
     public DateTimeOffset? CompletedAt { get; private set; }
     public long? DurationMs { get; private set; }
@@ -58,7 +84,9 @@ public sealed class AiGeneration
         string model,
         string promptVersion,
         string language,
+        GroundingMode groundingMode,
         string correlationId,
+        int? requestedTopK = null,
         DateTimeOffset? now = null
     ) =>
         new(
@@ -69,9 +97,35 @@ public sealed class AiGeneration
             model,
             promptVersion,
             language,
+            groundingMode,
             correlationId,
+            requestedTopK,
             now ?? DateTimeOffset.UtcNow
         );
+
+    public void RecordRetrieval(
+        long durationMs,
+        int chunkCount,
+        int documentCount,
+        string sourcesJson
+    )
+    {
+        if (GroundingMode != GroundingMode.Rag)
+            throw new InvalidOperationException("Retrieval is only valid for RAG generations.");
+        RetrievalStatus = RetrievalStatus.Succeeded;
+        RetrievalDurationMs = Math.Max(0, durationMs);
+        RetrievedChunkCount = Math.Max(0, chunkCount);
+        RetrievedDocumentCount = Math.Max(0, documentCount);
+        RetrievedSourcesJson = sourcesJson;
+        RetrievalErrorCode = null;
+    }
+
+    public void RecordRetrievalFailure(long durationMs, string errorCode)
+    {
+        RetrievalStatus = RetrievalStatus.Failed;
+        RetrievalDurationMs = Math.Max(0, durationMs);
+        RetrievalErrorCode = Required(errorCode, nameof(errorCode), 100);
+    }
 
     public void Complete(int? inputTokens, int? outputTokens, DateTimeOffset? now = null)
     {
