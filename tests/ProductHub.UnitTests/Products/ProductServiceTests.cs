@@ -36,6 +36,27 @@ public sealed class ProductServiceTests
             new ProductService(new FakeRepository()).ListAsync(1, 101, CancellationToken.None)
         );
 
+    [Fact]
+    public async Task UpdateAsync_ReplacesSourceFacts()
+    {
+        var product = Product.Create("sku-1", "Widget", "Acme");
+        var repository = new FakeRepository();
+        repository.Products.Add(product);
+        var result = await new ProductService(repository).UpdateAsync(
+            new UpdateProductCommand(
+                product.Id,
+                "Updated widget",
+                "Acme",
+                null,
+                [new ProductAttributeData("Weight", "2", "kg")],
+                Convert.ToBase64String([1])
+            ),
+            CancellationToken.None
+        );
+        Assert.Equal("Updated widget", result.Name);
+        Assert.Single(result.Attributes);
+    }
+
     private sealed class FakeRepository : IProductRepository
     {
         public bool ExistingSku { get; init; }
@@ -50,6 +71,11 @@ public sealed class ProductServiceTests
 
         public Task<Product?> GetAsync(Guid id, CancellationToken cancellationToken) =>
             Task.FromResult(Products.SingleOrDefault(x => x.Id == id));
+
+        public Task<Product?> GetForUpdateAsync(Guid id, CancellationToken cancellationToken) =>
+            Task.FromResult(Products.SingleOrDefault(x => x.Id == id));
+
+        public void SetOriginalRowVersion(Product product, byte[] rowVersion) { }
 
         public Task<bool> SkuExistsAsync(string sku, CancellationToken cancellationToken) =>
             Task.FromResult(ExistingSku);

@@ -42,6 +42,29 @@ public sealed class ProductsController(ProductService service) : ControllerBase
     public async Task<ActionResult<ProductDto>> Get(Guid id, CancellationToken cancellationToken) =>
         await service.GetAsync(id, cancellationToken) is { } product ? Ok(product) : NotFound();
 
+    [HttpPut("{id:guid}")]
+    [Authorize(Roles = "Admin")]
+    public async Task<ActionResult<ProductDto>> Update(
+        Guid id,
+        UpdateProductRequest request,
+        CancellationToken cancellationToken
+    ) =>
+        Ok(
+            await service.UpdateAsync(
+                new UpdateProductCommand(
+                    id,
+                    request.Name,
+                    request.Brand,
+                    request.CategoryId,
+                    request
+                        .Attributes.Select(x => new ProductAttributeData(x.Name, x.Value, x.Unit))
+                        .ToArray(),
+                    request.RowVersion
+                ),
+                cancellationToken
+            )
+        );
+
     [HttpGet]
     [ProducesResponseType<PagedResult<ProductDto>>(StatusCodes.Status200OK)]
     public async Task<ActionResult<PagedResult<ProductDto>>> List(
@@ -62,3 +85,11 @@ public sealed record CreateProductRequest(
 );
 
 public sealed record ProductAttributeRequest(string Name, string Value, string? Unit);
+
+public sealed record UpdateProductRequest(
+    string Name,
+    string Brand,
+    Guid? CategoryId,
+    IReadOnlyList<ProductAttributeRequest> Attributes,
+    string RowVersion
+);

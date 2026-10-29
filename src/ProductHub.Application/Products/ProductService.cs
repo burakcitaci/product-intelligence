@@ -57,6 +57,58 @@ public sealed class ProductService(
     public async Task<ProductDto?> GetAsync(Guid id, CancellationToken cancellationToken) =>
         (await repository.GetAsync(id, cancellationToken)) is { } product ? Map(product) : null;
 
+    public async Task<ProductDto> UpdateAsync(
+        UpdateProductCommand command,
+        CancellationToken cancellationToken
+    )
+    {
+        var errors = Validate(
+            new CreateProductCommand(
+                "existing-sku",
+                command.Name,
+                command.Brand,
+                null,
+                command.CategoryId,
+                command.Attributes
+            )
+        );
+        byte[] rowVersion = [];
+        try
+        {
+            rowVersion = Convert.FromBase64String(command.RowVersion ?? "");
+        }
+        catch (FormatException)
+        {
+            errors["rowVersion"] = ["Row version is invalid."];
+        }
+        if (rowVersion.Length == 0)
+            errors["rowVersion"] = ["Row version is required."];
+        if (errors.Count > 0)
+            throw new ValidationException(errors);
+
+        var product =
+            await repository.GetForUpdateAsync(command.Id, cancellationToken)
+            ?? throw new ProductNotFoundException($"Product '{command.Id}' was not found.");
+        product.UpdateDetails(
+            command.Name,
+            command.Brand,
+            command.CategoryId,
+            command.Attributes.Select(x => new ProductAttribute(x.Name, x.Value, x.Unit))
+        );
+        repository.SetOriginalRowVersion(product, rowVersion);
+        try
+        {
+            await repository.SaveChangesAsync(cancellationToken);
+        }
+        catch (ProductConcurrencyException)
+        {
+            throw new ConflictException(
+                "This product changed while you were editing it. Reload and try again."
+            );
+        }
+        return Map(product);
+    }
+
     public async Task<PagedResult<ProductDto>> ListAsync(
         int page,
         int pageSize,
@@ -122,3 +174,8 @@ public sealed class ProductService(
 
 public sealed class DuplicateSkuException(Exception innerException)
     : Exception("Duplicate SKU.", innerException);
+
+public sealed class ProductConcurrencyException(Exception innerException)
+    : Exception("The product was changed by another user.", innerException);
+
+public sealed class ProductNotFoundException(string message) : Exception(message);

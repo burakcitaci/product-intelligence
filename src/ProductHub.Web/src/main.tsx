@@ -63,8 +63,10 @@ type Product = {
   name: string;
   brand: string;
   catalogId?: string;
+  categoryId?: string;
   attributes: Attribute[];
   updatedAt: string;
+  rowVersion: string;
 };
 type Draft = {
   id: string;
@@ -173,6 +175,34 @@ const statusName = (status: Draft["status"]) =>
     : (["Pending review", "Approved", "Rejected"][status] ?? "Unknown");
 const statusClass = (status: Draft["status"]) =>
   statusName(status).toLowerCase().replace(" ", "-");
+
+const parseAttributes = (value: string): Attribute[] =>
+  value
+    .split("\n")
+    .map<Attribute | null>((line) => {
+      const separator = line.indexOf(":");
+      if (separator < 1) return null;
+      const name = line.slice(0, separator).trim();
+      const remainder = line.slice(separator + 1).trim();
+      const unitSeparator = remainder.lastIndexOf("|");
+      const attributeValue = (
+        unitSeparator >= 0 ? remainder.slice(0, unitSeparator) : remainder
+      ).trim();
+      const unit = unitSeparator >= 0 ? remainder.slice(unitSeparator + 1).trim() : "";
+      return name && attributeValue
+        ? { name, value: attributeValue, ...(unit ? { unit } : {}) }
+        : null;
+    })
+    .filter((item): item is Attribute => item !== null);
+
+const formatAttributes = (attributes: Attribute[]) =>
+  attributes
+    .map(
+      (attribute) =>
+        `${attribute.name}: ${attribute.value}${attribute.unit ? ` | ${attribute.unit}` : ""}`,
+    )
+    .join("\n");
+
 function App() {
   const [currentUser, setCurrentUser] = useState<
     CurrentUser | null | undefined
@@ -188,7 +218,7 @@ function App() {
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [dialog, setDialog] = useState<"catalog" | "product" | "generate" | null>(null);
+  const [dialog, setDialog] = useState<"catalog" | "product" | "facts" | "generate" | null>(null);
   const [useRag, setUseRag] = useState(false);
   const [topK, setTopK] = useState(5);
   const [knowledgeDocuments, setKnowledgeDocuments] = useState<KnowledgeDocument[]>([]);
@@ -207,6 +237,11 @@ function App() {
     name: "",
     brand: "",
     attributes: "Material: Stainless steel\nColor: Forest green",
+  });
+  const [sourceFactsForm, setSourceFactsForm] = useState({
+    name: "",
+    brand: "",
+    attributes: "",
   });
   const activeCatalog = catalogs.find((x) => x.id === catalogId);
   const selected = products.find((p) => p.id === selectedId);
@@ -497,15 +532,7 @@ function App() {
     event.preventDefault();
     setBusy(true);
     setError("");
-    const attributes = productForm.attributes
-      .split("\n")
-      .map((line) => line.split(":"))
-      .filter((x) => x.length > 1 && x[0].trim() && x.slice(1).join(":").trim())
-      .map((x) => ({
-        name: x[0].trim(),
-        value: x.slice(1).join(":").trim(),
-        unit: null,
-      }));
+    const attributes = parseAttributes(productForm.attributes);
     try {
       const created = await request<Product>("/api/products", {
         method: "POST",
@@ -520,6 +547,39 @@ function App() {
       await loadCatalogs();
       setSelectedId(created.id);
       setProductForm({ sku: "", name: "", brand: "", attributes: "" });
+      setDialog(null);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const openSourceFacts = () => {
+    if (!selected) return;
+    setSourceFactsForm({
+      name: selected.name,
+      brand: selected.brand,
+      attributes: formatAttributes(selected.attributes),
+    });
+    setDialog("facts");
+  };
+  const updateSourceFacts = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!selected) return;
+    setBusy(true);
+    setError("");
+    try {
+      const updated = await request<Product>(`/api/products/${selected.id}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          name: sourceFactsForm.name,
+          brand: sourceFactsForm.brand,
+          categoryId: selected.categoryId ?? null,
+          attributes: parseAttributes(sourceFactsForm.attributes),
+          rowVersion: selected.rowVersion,
+        }),
+      });
+      setProducts((items) => items.map((item) => (item.id === updated.id ? updated : item)));
       setDialog(null);
     } catch (e) {
       setError((e as Error).message);
@@ -873,6 +933,10 @@ function App() {
                     <span><small>Updated</small>{new Date(selected.updatedAt).toLocaleDateString()}</span>
                   </div>
                 </div>
+                <Button type="button" variant="outline" onClick={openSourceFacts}>
+                  <Pencil aria-hidden="true" />
+                  Edit source facts
+                </Button>
               </div>
               <div className="draft-toolbar">
                 <div className="draft-toolbar-summary">
@@ -1244,6 +1308,37 @@ function App() {
                   <Button disabled={busy}>
                     {busy ? "Adding…" : "Add product"}
                   </Button>
+                </DialogFooter>
+              </form>
+            ) : dialog === "facts" ? (
+              <form className="grid gap-4" onSubmit={updateSourceFacts}>
+                <DialogHeader>
+                  <p className="eyebrow">{selected?.sku}</p>
+                  <DialogTitle>Edit source facts</DialogTitle>
+                  <DialogDescription>
+                    Maintain the verified product data used by facts-only and RAG generation.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Label className="form-field">
+                    <span>Product name</span>
+                    <Input required maxLength={200} value={sourceFactsForm.name} onChange={(event) => setSourceFactsForm((value) => ({ ...value, name: event.target.value }))} />
+                  </Label>
+                  <Label className="form-field">
+                    <span>Brand</span>
+                    <Input required maxLength={100} value={sourceFactsForm.brand} onChange={(event) => setSourceFactsForm((value) => ({ ...value, brand: event.target.value }))} />
+                  </Label>
+                </div>
+                <Label className="form-field">
+                  <span>Source facts <small>one per line: Name: Value | Unit</small></span>
+                  <Textarea rows={9} value={sourceFactsForm.attributes} onChange={(event) => setSourceFactsForm((value) => ({ ...value, attributes: event.target.value }))} placeholder={"Capacity: 800 | ml\nMaterial: Borosilicate glass\nPower: 150 | W"} />
+                </Label>
+                <p className="text-sm text-muted-foreground">
+                  Add or change a line to update a fact. Remove a line to delete that fact. The unit after <code>|</code> is optional.
+                </p>
+                <DialogFooter>
+                  <Button type="button" variant="outline" onClick={() => setDialog(null)} disabled={busy}>Cancel</Button>
+                  <Button disabled={busy}>{busy ? "Saving…" : "Save source facts"}</Button>
                 </DialogFooter>
               </form>
             ) : dialog === "generate" ? (

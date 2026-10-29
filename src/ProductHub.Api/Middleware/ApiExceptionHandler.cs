@@ -35,6 +35,11 @@ internal sealed class ApiExceptionHandler(
                 "Not found",
                 new Dictionary<string, object?>()
             ),
+            ProductNotFoundException => (
+                StatusCodes.Status404NotFound,
+                "Not found",
+                new Dictionary<string, object?>()
+            ),
             GenerationUnavailableException generation => (
                 StatusCodes.Status503ServiceUnavailable,
                 "Content generation failed",

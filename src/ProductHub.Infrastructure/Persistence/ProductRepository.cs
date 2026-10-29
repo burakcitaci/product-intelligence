@@ -14,6 +14,12 @@ internal sealed class ProductRepository(ProductHubDbContext dbContext) : IProduc
     public Task<Product?> GetAsync(Guid id, CancellationToken cancellationToken) =>
         dbContext.Products.AsNoTracking().SingleOrDefaultAsync(x => x.Id == id, cancellationToken);
 
+    public Task<Product?> GetForUpdateAsync(Guid id, CancellationToken cancellationToken) =>
+        dbContext.Products.SingleOrDefaultAsync(x => x.Id == id, cancellationToken);
+
+    public void SetOriginalRowVersion(Product product, byte[] rowVersion) =>
+        dbContext.Entry(product).Property(x => x.RowVersion).OriginalValue = rowVersion;
+
     public Task<bool> SkuExistsAsync(string sku, CancellationToken cancellationToken) =>
         dbContext.Products.AnyAsync(x => x.Sku == sku, cancellationToken);
 
@@ -46,6 +52,10 @@ internal sealed class ProductRepository(ProductHubDbContext dbContext) : IProduc
             when (ex.InnerException is SqlException { Number: 2601 or 2627 })
         {
             throw new DuplicateSkuException(ex);
+        }
+        catch (DbUpdateConcurrencyException ex)
+        {
+            throw new ProductConcurrencyException(ex);
         }
     }
 }

@@ -11,6 +11,15 @@ public sealed record CreateProductCommand(
     IReadOnlyList<ProductAttributeData> Attributes
 );
 
+public sealed record UpdateProductCommand(
+    Guid Id,
+    string Name,
+    string Brand,
+    Guid? CategoryId,
+    IReadOnlyList<ProductAttributeData> Attributes,
+    string RowVersion
+);
+
 public sealed record ProductDto(
     Guid Id,
     string Sku,
