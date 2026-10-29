@@ -1,233 +1,125 @@
 # Product Intelligence Hub
 
-Production-style, local-first product information platform implementing **M1–M5**, from product catalog through a human review UI.
+Product Intelligence Hub is a local-first product information management application. It organizes products into catalogs and uses a local Ollama model to generate German and English product descriptions from trusted product facts.
 
-## Implemented
+Administrators can create catalogs and products, generate and edit drafts, inspect model runs, approve or reject content, and select one approved version as the current published description. Viewer accounts see only published catalog content.
 
-- .NET 10 modular monolith with Clean Architecture boundaries
-- Product aggregate with extensible JSON attributes
-- User-created catalogs that organize related products
-- SQL Server persistence, migration, unique SKU constraint, and row-version concurrency
-- `POST /api/products`, `GET /api/products`, and `GET /api/products/{id}`
-- Typed DTOs, validation, pagination, OpenAPI, and Problem Details
-- Unit tests and SQL Server Testcontainers API integration tests
-- Local German/English content generation through Ollama and `Microsoft.Extensions.AI`
-- Versioned, embedded prompts with untrusted product-data isolation
-- Review-only content drafts, generation audit metadata, failure recording, and idempotency
-- Text, Markdown, CSV, JSON, XML, and PDF document ingestion
-- Ollama `nomic-embed-text` embeddings, persistent Qdrant vector search, and source citations
-- Baseline RAG evaluation fixtures under `tests/evaluation`
-- Bounded local agent workflows with allow-listed product tools and human approval gates
-- Responsive React review workspace with product search, side-by-side source facts and AI copy, generation audit data, and terminal approve/reject decisions
+## Technology
 
-The included authentication is intended for local demonstration; production identity integration remains a future milestone.
+- .NET 10 and ASP.NET Core
+- Entity Framework Core with SQL Server
+- React, TypeScript, Vite, shadcn/ui, and TanStack Table
+- Ollama for local text generation and embeddings
+- Qdrant for vector retrieval
+- Docker Compose for the API, SQL Server, and Qdrant
+- OpenTelemetry log export for telemetry-hub
 
-## Prerequisites
+## Requirements
+
+Install:
 
 - [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
-- Docker Desktop with Linux containers for SQL Server and integration tests
-- [Ollama](https://ollama.com/download) for manual AI generation
-- Node.js and npm
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/)
+- [Node.js](https://nodejs.org/) 22 or newer
+- [Ollama](https://ollama.com/download)
 - PowerShell 7 on Windows, or Bash on macOS/Linux
 
-## Start locally
+Pull the local AI models:
 
-Create the local environment file first:
+```bash
+ollama pull qwen3:8b
+ollama pull nomic-embed-text
+```
+
+## Install and run
+
+Clone the repository and create the local environment file:
+
+```bash
+git clone <repository-url>
+cd product-intelligence-hub
+cp .env.example .env
+```
+
+On Windows PowerShell:
 
 ```powershell
 Copy-Item .env.example .env
-```
-
-On Windows, use the PowerShell launcher:
-
-```powershell
 .\scripts\Start-ProductHub.ps1
 ```
 
-On macOS/Linux, use the Bash launcher:
+On macOS or Linux:
 
 ```bash
 cp .env.example .env
-./scripts/start-producthub.sh
+bash ./scripts/start-producthub.sh
 ```
 
-The launcher loads `.env`, builds and starts the Docker services, installs frontend dependencies when needed, and starts the React development server. Logs are written to `.run`. Stop the application with:
+The launcher:
+
+1. Loads configuration from `.env`.
+2. Builds and starts the API, SQL Server, and Qdrant with Docker Compose.
+3. Installs frontend packages when needed.
+4. Starts the React development server.
+
+Open:
+
+- Product Hub: [http://localhost:5173](http://localhost:5173)
+- API: [http://localhost:5099](http://localhost:5099)
+- OpenAPI document: [http://localhost:5099/openapi/v1.json](http://localhost:5099/openapi/v1.json)
+- Qdrant: [http://localhost:6333](http://localhost:6333)
+
+Application logs and frontend process information are written to `.run/`.
+
+## Demo accounts
+
+| Role | Email | Password |
+| --- | --- | --- |
+| Administrator | `admin@producthub.local` | `Admin123!` |
+| Viewer | `viewer@producthub.local` | `Viewer123!` |
+
+These accounts are for local development only.
+
+## Stop the application
+
+Windows:
 
 ```powershell
 .\scripts\Stop-ProductHub.ps1
 ```
 
-```bash
-./scripts/stop-producthub.sh
-```
-
-For manual startup:
-
-```powershell
-Copy-Item .env.example .env
-# Edit .env and replace the sample password.
-docker compose up -d --wait
-$env:ConnectionStrings__ProductHub = 'Server=127.0.0.1,1433;Database=ProductHub;User Id=sa;Password=<same-password>;TrustServerCertificate=True;Encrypt=True'
-dotnet tool restore
-dotnet ef database update --project src/ProductHub.Infrastructure --startup-project src/ProductHub.Api
-dotnet run --project src/ProductHub.Api --launch-profile http
-```
-
-The `http` launch profile binds to localhost only. OpenAPI JSON is available in Development at `/openapi/v1.json`.
-
-Create and retrieve a product:
-
-```powershell
-$product = Invoke-RestMethod -Method Post -Uri http://localhost:5099/api/products -ContentType application/json -Body (@{
-  sku = 'BOTTLE-750'
-  name = 'Trail Bottle'
-  brand = 'Northwind'
-  attributes = @(@{ name = 'Volume'; value = '750'; unit = 'ml' })
-} | ConvertTo-Json -Depth 4)
-
-Invoke-RestMethod -Uri "http://localhost:5099/api/products/$($product.id)"
-Invoke-RestMethod -Uri 'http://localhost:5099/api/products?page=1&pageSize=20'
-```
-
-## Local AI generation
-
-Install/start Ollama on Windows, then pull the default model:
-
-```powershell
-ollama pull qwen3:8b
-ollama pull nomic-embed-text
-ollama list
-ollama ps
-```
-
-`ollama ps` shows the active processor split after a request. A GPU/CPU split containing GPU indicates acceleration; `100% CPU` indicates the supported CPU fallback. On AMD Windows systems, acceleration depends on the installed Ollama release and compatible Radeon drivers—verify rather than assume it.
-
-With SQL Server, Ollama, and the API running, generate a draft:
-
-```powershell
-$headers = @{ 'Idempotency-Key' = "generate-$([guid]::NewGuid().ToString('N'))" }
-$draft = Invoke-RestMethod -Method Post -Uri "http://localhost:5099/api/products/$($product.id)/drafts/generate" `
-  -Headers $headers -ContentType application/json -Body '{"language":"de"}'
-Invoke-RestMethod -Uri "http://localhost:5099/api/drafts/$($draft.id)"
-Invoke-RestMethod -Uri "http://localhost:5099/api/products/$($product.id)/drafts"
-```
-
-The response is always a `PendingReview` draft. Reusing a successful idempotency key returns the same draft; in-progress or failed keys return `409`. Use a new key for an explicit retry after failure.
-
-The optional manual smoke-test helper is:
-
-```powershell
-./scripts/Invoke-OllamaSmokeTest.ps1 -ProductId $product.id -Language de
-```
-
-The Bash equivalent accepts product ID and language as positional arguments:
+macOS/Linux:
 
 ```bash
-./scripts/invoke-ollama-smoke-test.sh "$PRODUCT_ID" de
+bash ./scripts/stop-producthub.sh
 ```
 
-Override settings with `Ai__Model`, `Ai__Endpoint`, `Ai__TimeoutSeconds`, or `Ai__PromptVersion`. No cloud provider fallback exists.
+To stop and remove all Docker containers:
 
-Check the actual port printed by `dotnet run`; the launch profile is authoritative if it changes from `5099`.
-
-## Review workspace
-
-With the API running on port `5099`, start the local React client in a second terminal:
-
-```powershell
-Set-Location src/ProductHub.Web
-npm install
-npm run dev
-```
-
-Open `http://localhost:5173`. The workspace creates and browses catalogs, adds products with factual attributes, generates German or English drafts, lets users edit pending AI copy, compares supplied facts with generated copy, shows model audit metadata, and supports approval, rejection, and selecting one approved version as current. The browser talks only to the local API; no hosted frontend or cloud font dependency is required.
-
-In Development, startup seeds three sample catalogs—Outdoor Essentials, Home Coffee, and Smart Workspace—with three distinct products each. Seeding is idempotent, so restarting the API does not duplicate them.
-
-## Build and test
-
-```powershell
-dotnet restore ProductHub.slnx
-dotnet build ProductHub.slnx --no-restore
-dotnet test tests/ProductHub.UnitTests --no-build
-dotnet test tests/ProductHub.IntegrationTests --no-build
-```
-
-Integration tests create an isolated SQL Server container, apply migrations, and never call external AI services.
-
-## Stop infrastructure
-
-```powershell
+```bash
 docker compose down
-# To intentionally remove local database data as well:
-docker compose down --volumes
 ```
 
-## Configuration and security
+Add `--volumes` only when you intentionally want to remove local SQL Server and Qdrant data.
 
-`ConnectionStrings__ProductHub` overrides the development placeholder in `appsettings.json`. Keep real credentials in `.env` or user secrets; `.env` is ignored. M1 has no authentication and is for trusted local development only. Docker and the launch profile expose services on loopback.
+## Main workflow
 
-## Troubleshooting
+1. Sign in as an administrator.
+2. Create or select a catalog.
+3. Add products and factual attributes.
+4. Generate a German or English draft with Ollama.
+5. Review or edit the generated content.
+6. Approve or reject one or more drafts.
+7. Mark one approved draft as the current published version.
+8. Sign in as the viewer to see the published catalog.
 
-- **Login failed:** confirm the API connection-string password matches `MSSQL_SA_PASSWORD` in `.env`.
-- **Container unhealthy:** SQL Server requires a strong password and enough Docker memory. Inspect with `docker compose logs sqlserver`.
-- **Port 1433 occupied:** change the host side of the Compose port and the API connection string together.
-- **Integration tests skipped/fail before execution:** ensure Docker Desktop is running and Linux containers are enabled.
-- **Migration command unavailable:** run `dotnet tool restore` from the repository root.
-- **Ollama connection failure:** verify `Invoke-RestMethod http://localhost:11434/api/tags`, then confirm `Ai__Endpoint` from the API process can reach the Windows host.
-- **Model unavailable:** run `ollama list`, pull the configured model, and ensure `Ai__Model` matches exactly.
-- **Generation timeout:** increase `Ai__TimeoutSeconds` up to 600, or use a smaller model/CPU-friendly quantization.
-- **Invalid JSON:** inspect the failed `AiGenerations.ErrorCode`; the application records `invalid-json` or `invalid-output` and never fabricates a draft.
-- **Qdrant unavailable:** verify `docker compose ps` and open `http://localhost:6333/healthz`.
-- **Embedding unavailable:** run `ollama list`, pull `nomic-embed-text`, and verify `http://localhost:11434/api/tags`.
+The application records prompt version, model, token usage, latency, status, and correlation ID for every generation.
 
-Ollama is never required for automated builds or tests. Frontend checks are `npm run typecheck` and `npm run build` from `src/ProductHub.Web`.
+## telemetry-hub integration
 
-## Local document retrieval
+Product Hub can send its structured ASP.NET Core logs to telemetry-hub through OpenTelemetry OTLP/HTTP. This makes API activity and Ollama generation information available for centralized log search, dashboards, and operational monitoring. Generation logs include model latency and token counts.
 
-Compose starts both SQL Server and Qdrant. After applying migrations and starting the API, upload a supported document and search it:
-
-```powershell
-$document = Invoke-RestMethod -Method Post -Uri http://localhost:5099/api/documents -Form @{
-  file = Get-Item .\tests\evaluation\sample-bottle-manual.md
-}
-
-$results = Invoke-RestMethod -Method Post -Uri http://localhost:5099/api/knowledge/search `
-  -ContentType application/json -Body '{"query":"What is the bottle volume?","limit":5}'
-$results | Format-Table score,citation,text -Wrap
-```
-
-Uploads are limited to 10 MiB and deduplicated by SHA-256. Chunk text and source metadata live in SQL Server; Qdrant stores a rebuildable vector projection. Override defaults with `Rag__EmbeddingModel`, `Rag__QdrantEndpoint`, `Rag__VectorSize`, `Rag__ChunkSize`, or `Rag__ChunkOverlap`. The configured vector size must match the embedding model.
-
-## Agent workflows
-
-Start a bounded workflow for an existing product:
-
-```powershell
-$workflow = Invoke-RestMethod -Method Post -Uri http://localhost:5099/api/agent/workflows `
-  -ContentType application/json -Body (@{
-    productId = $product.id
-    objective = 'Inspect this product and validate its data quality. Do not modify it.'
-  } | ConvertTo-Json)
-```
-
-Read-only workflows complete automatically. A workflow that proposes a product change returns `AwaitingApproval`. Review its `proposal`, then explicitly approve or reject it:
-
-```powershell
-Invoke-RestMethod -Method Post -Uri "http://localhost:5099/api/agent/workflows/$($workflow.id)/approve"
-# or
-Invoke-RestMethod -Method Post -Uri "http://localhost:5099/api/agent/workflows/$($workflow.id)/reject"
-```
-
-Allowed tools are `product.lookup`, `product.validate`, and `product.propose_update`. Defaults are five steps, 500 characters per argument, and a 120-second execution limit. Configure them with `Agent__MaxSteps`, `Agent__MaxArgumentLength`, and `Agent__TimeoutSeconds`.
-
-## Design notes
-
-See [architecture overview](docs/architecture/overview.md), [data model](docs/architecture/data-model.md), and the [modular-monolith ADR](docs/adr/0001-modular-monolith.md).
-
-## OpenTelemetry logs
-
-The API can export its existing `ILogger` records to the telemetry-hub OTLP gateway. Add these values to the local `.env` file:
+Add a telemetry-hub ingestion endpoint and key to `.env`:
 
 ```dotenv
 OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:3001/api/ingest
@@ -236,17 +128,66 @@ OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
 OTEL_SERVICE_NAME=product-hub-api
 ```
 
-The exporter posts OTLP/HTTP protobuf log batches to `/api/ingest/v1/logs`. If the endpoint or headers are absent, remote log export remains disabled and the API continues using its normal local logging. Do not commit the client key.
+When telemetry-hub is running in the expected local Kubernetes environment, the helper can provision a scoped ingestion key and update Product Hub automatically.
 
-When a local telemetry-hub Kubernetes environment is available, the helper scripts can provision and configure a scoped ingestion key:
+Windows:
 
 ```powershell
 .\scripts\Configure-TelemetryHub.ps1
 ```
 
+macOS/Linux:
+
 ```bash
-./scripts/configure-telemetry-hub.sh
+bash ./scripts/configure-telemetry-hub.sh
 ```
 
-The Bash version requires `kubectl`, `jq`, `openssl`, `base64`, and Python 3.
+The Bash helper requires `kubectl`, `jq`, `openssl`, `base64`, and Python 3. Real ingestion keys are written only to the ignored local `.env` file.
 
+Product Hub currently exports logs. The same OpenTelemetry foundation can later be extended with application metrics and distributed traces for richer telemetry-hub monitors.
+
+## Build and test
+
+Backend:
+
+```bash
+dotnet restore ProductHub.slnx
+dotnet build ProductHub.slnx --no-restore
+dotnet test tests/ProductHub.UnitTests/ProductHub.UnitTests.csproj --no-build
+```
+
+Frontend:
+
+```bash
+cd src/ProductHub.Web
+npm ci
+npm run build
+```
+
+Integration tests use an isolated SQL Server Testcontainer:
+
+```bash
+dotnet test tests/ProductHub.IntegrationTests/ProductHub.IntegrationTests.csproj
+```
+
+## Scripts
+
+| PowerShell | Bash | Purpose |
+| --- | --- | --- |
+| `Start-ProductHub.ps1` | `start-producthub.sh` | Start the local application |
+| `Stop-ProductHub.ps1` | `stop-producthub.sh` | Stop API and frontend processes |
+| `Configure-TelemetryHub.ps1` | `configure-telemetry-hub.sh` | Configure telemetry-hub log ingestion |
+| `Invoke-OllamaSmokeTest.ps1` | `invoke-ollama-smoke-test.sh` | Generate a draft through the API |
+
+All scripts are in the `scripts/` directory.
+
+## Architecture
+
+Product Hub is a modular monolith with Domain, Application, Infrastructure, and API projects. SQL Server stores authoritative product, draft, generation, and document data. Qdrant stores the rebuildable vector projection used by retrieval.
+
+More detail is available in:
+
+- [Architecture overview](docs/architecture/overview.md)
+- [Data model](docs/architecture/data-model.md)
+- [Modular-monolith ADR](docs/adr/0001-modular-monolith.md)
+- [Local Ollama ADR](docs/adr/0002-local-ollama.md)
