@@ -1,0 +1,30 @@
+@ProductHub.Api_HostAddress = http://localhost:5099
+
+POST {{ProductHub.Api_HostAddress}}/api/products
+Content-Type: application/json
+
+{
+  "sku": "BOTTLE-750",
+  "name": "Trail Bottle",
+  "brand": "Northwind",
+  "attributes": [
+    { "name": "Volume", "value": "750", "unit": "ml" }
+  ]
+}
+
+###
+
+GET {{ProductHub.Api_HostAddress}}/api/products?page=1&pageSize=20
+Accept: application/json
+
+### Generate after replacing the product id
+
+POST {{ProductHub.Api_HostAddress}}/api/products/00000000-0000-0000-0000-000000000000/drafts/generate
+Content-Type: application/json
+Idempotency-Key: manual-generation-1
+
+{
+  "language": "de"
+}
+
+###

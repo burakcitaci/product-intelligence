@@ -1,0 +1,13 @@
+bin/
+obj/
+node_modules/
+dist/
+.vs/
+.idea/
+.env
+.run/
+graphify-out/
+TestResults/
+.artifacts/
+*.user
+*.log

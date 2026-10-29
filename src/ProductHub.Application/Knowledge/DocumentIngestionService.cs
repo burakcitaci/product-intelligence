@@ -1,0 +1,180 @@
+using System.Security.Cryptography;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using ProductHub.Application.Abstractions;
+using ProductHub.Application.Content;
+using ProductHub.Application.Products;
+using ProductHub.Domain.Knowledge;
+
+namespace ProductHub.Application.Knowledge;
+
+public sealed class DocumentIngestionService(
+    IKnowledgeDocumentStore store,
+    IDocumentTextExtractor extractor,
+    ITextEmbeddingGenerator embeddings,
+    IVectorStore vectors,
+    IOptions<RagSettings> settings,
+    ILogger<DocumentIngestionService> logger
+)
+{
+    public async Task<DocumentDto> IngestAsync(
+        IngestDocumentCommand command,
+        CancellationToken cancellationToken
+    )
+    {
+        Validate(command);
+        var hash = Convert.ToHexString(SHA256.HashData(command.Content));
+        if (await store.ExistsByHashAsync(hash, cancellationToken))
+            throw new ConflictException("This document content has already been ingested.");
+        var document = KnowledgeDocument.Start(command.FileName, command.ContentType, hash);
+        await store.AddAsync(document, cancellationToken);
+        await store.SaveChangesAsync(cancellationToken);
+        try
+        {
+            var extracted = await extractor.ExtractAsync(
+                command.FileName,
+                command.ContentType,
+                command.Content,
+                cancellationToken
+            );
+            var chunks = Chunk(
+                extracted.Text,
+                settings.Value.ChunkSize,
+                settings.Value.ChunkOverlap
+            );
+            var generated = await embeddings.GenerateAsync(chunks, cancellationToken);
+            if (generated.Count != chunks.Count)
+                throw new DocumentIngestionException(
+                    "embedding-count-mismatch",
+                    "Embedding count did not match chunk count."
+                );
+            document.Complete(chunks);
+            await store.AddChunksAsync(document.Chunks, cancellationToken);
+            await vectors.UpsertAsync(
+                document
+                    .Chunks.Zip(
+                        generated,
+                        (chunk, vector) =>
+                            new VectorDocument(
+                                chunk.Id,
+                                document.Id,
+                                chunk.Ordinal,
+                                chunk.Text,
+                                vector
+                            )
+                    )
+                    .ToArray(),
+                cancellationToken
+            );
+            await store.SaveChangesAsync(cancellationToken);
+            return Map(document);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            await PersistFailureAsync(document, "cancelled");
+            throw;
+        }
+        catch (DocumentIngestionException exception)
+        {
+            await PersistFailureAsync(document, exception.ErrorCode);
+            throw;
+        }
+        catch (Exception exception)
+        {
+            await PersistFailureAsync(document, "ingestion-failed");
+            throw new DocumentIngestionException(
+                "ingestion-failed",
+                "Document ingestion failed.",
+                exception
+            );
+        }
+    }
+
+    public async Task<DocumentDto> GetAsync(Guid id, CancellationToken cancellationToken) =>
+        Map(
+            await store.GetAsync(id, cancellationToken)
+                ?? throw new NotFoundException($"Document '{id}' was not found.")
+        );
+
+    public static IReadOnlyList<string> Chunk(string text, int size, int overlap)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            throw new DocumentIngestionException(
+                "empty-document",
+                "The document contains no extractable text."
+            );
+        var normalized = string.Join(
+            ' ',
+            text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
+        );
+        var result = new List<string>();
+        for (var start = 0; start < normalized.Length; start += size - overlap)
+        {
+            var length = Math.Min(size, normalized.Length - start);
+            if (start + length < normalized.Length)
+            {
+                var boundary = normalized.LastIndexOf(' ', start + length - 1, length);
+                if (boundary > start + size / 2)
+                    length = boundary - start;
+            }
+            result.Add(normalized.Substring(start, length));
+            if (start + length >= normalized.Length)
+                break;
+        }
+        return result;
+    }
+
+    private void Validate(IngestDocumentCommand command)
+    {
+        var errors = new Dictionary<string, string[]>();
+        if (string.IsNullOrWhiteSpace(command.FileName) || command.FileName.Length > 260)
+            errors["fileName"] = ["A file name up to 260 characters is required."];
+        if (string.IsNullOrWhiteSpace(command.ContentType) || command.ContentType.Length > 100)
+            errors["contentType"] = ["A content type up to 100 characters is required."];
+        if (command.Content.Length == 0 || command.Content.Length > settings.Value.MaxUploadBytes)
+            errors["file"] =
+            [
+                $"File size must be between 1 and {settings.Value.MaxUploadBytes} bytes.",
+            ];
+        if (errors.Count > 0)
+            throw new ValidationException(errors);
+    }
+
+    private async Task PersistFailureAsync(KnowledgeDocument document, string code)
+    {
+        document.Fail(code);
+        try
+        {
+            await store.SaveChangesAsync(CancellationToken.None);
+        }
+        catch (Exception exception)
+        {
+            logger.LogError(
+                exception,
+                "Failed to persist document ingestion failure {DocumentId}.",
+                document.Id
+            );
+        }
+    }
+
+    private static DocumentDto Map(KnowledgeDocument x) =>
+        new(
+            x.Id,
+            x.FileName,
+            x.ContentType,
+            x.Status,
+            x.Chunks.Count,
+            x.CreatedAt,
+            x.CompletedAt,
+            x.ErrorCode
+        );
+}
+
+public sealed class DocumentIngestionException(
+    string errorCode,
+    string message,
+    Exception? inner = null
+) : Exception(message, inner)
+{
+    public string ErrorCode { get; } = errorCode;
+}

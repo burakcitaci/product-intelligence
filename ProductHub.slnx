@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/ProductHub.Api/ProductHub.Api.csproj" />
+    <Project Path="src/ProductHub.Application/ProductHub.Application.csproj" />
+    <Project Path="src/ProductHub.Domain/ProductHub.Domain.csproj" />
+    <Project Path="src/ProductHub.Infrastructure/ProductHub.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/ProductHub.IntegrationTests/ProductHub.IntegrationTests.csproj" />
+    <Project Path="tests/ProductHub.UnitTests/ProductHub.UnitTests.csproj" />
+  </Folder>
+</Solution>

@@ -1,0 +1,10 @@
+**/bin/
+**/obj/
+**/node_modules/
+**/dist/
+.artifacts/
+.run/
+.vs/
+graphify-out/
+.env
+.git/
