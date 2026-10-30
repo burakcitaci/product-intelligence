@@ -21,7 +21,7 @@ export function AppShell({ children, user, activeRoute = "catalogs", onNavigate,
       <SidebarContent><SidebarMenu>{navigation.map((item) => <SidebarMenuItem key={item.route}><SidebarMenuButton active={activeRoute === item.route} onClick={() => onNavigate(item.route)}><item.icon className="size-4" />{item.label}</SidebarMenuButton></SidebarMenuItem>)}</SidebarMenu></SidebarContent>
       <SidebarFooter><div className="grid gap-3"><div className="min-w-0 px-2"><strong className="block truncate text-sm">{user.displayName}</strong><span className="block truncate text-xs text-muted-foreground">{user.email}</span></div><Separator /><Button variant="ghost" className="justify-start" onClick={onLogout}><LogOut />Sign out</Button></div></SidebarFooter>
     </Sidebar>
-    <SidebarInset><div className="flex h-16 items-center border-b bg-card px-4 md:hidden"><SidebarTrigger /><strong className="ml-2 text-sm">Product Hub</strong></div>{children}</SidebarInset>
+    <SidebarInset className="app-shell-main"><div className="flex h-16 items-center border-b bg-card px-4 md:hidden"><SidebarTrigger /><strong className="ml-2 text-sm">Product Hub</strong></div>{children}</SidebarInset>
   </SidebarProvider>;
 }
 
