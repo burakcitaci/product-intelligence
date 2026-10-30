@@ -22,7 +22,8 @@ public sealed class ContentGenerationService(
         CancellationToken cancellationToken
     )
     {
-        Validate(command);
+        var options = settings.Value;
+        Validate(command, options);
         var product =
             await store.GetProductAsync(command.ProductId, cancellationToken)
             ?? throw new NotFoundException($"Product '{command.ProductId}' was not found.");
@@ -49,12 +50,14 @@ public sealed class ContentGenerationService(
             );
         }
 
-        var options = settings.Value;
+        var selectedModel = string.IsNullOrWhiteSpace(command.Model)
+            ? options.Model
+            : command.Model.Trim();
         var generation = AiGeneration.Start(
             product.Id,
             command.IdempotencyKey,
             options.Provider,
-            options.Model,
+            selectedModel,
             options.PromptVersion,
             NormalizeLanguage(command.Language),
             command.UseRag ? GroundingMode.Rag : GroundingMode.FactsOnly,
@@ -149,7 +152,11 @@ public sealed class ContentGenerationService(
             );
             var generated = await generator.GenerateAsync(
                 context,
-                new GenerationOptions(generation.Language, generation.PromptVersion),
+                new GenerationOptions(
+                    generation.Language,
+                    generation.PromptVersion,
+                    generation.Model
+                ),
                 cancellationToken
             );
             ValidateGenerated(generated);
@@ -352,7 +359,7 @@ public sealed class ContentGenerationService(
         }
     }
 
-    private static void Validate(GenerateDraftCommand command)
+    private static void Validate(GenerateDraftCommand command, AiSettings settings)
     {
         var errors = new Dictionary<string, string[]>();
         if (command.ProductId == Guid.Empty)
@@ -369,6 +376,11 @@ public sealed class ContentGenerationService(
             errors["language"] = ["Language must be 'de' or 'en'."];
         if (command.UseRag && command.TopK is < 1 or > 20)
             errors["topK"] = ["Top-K must be between 1 and 20."];
+        var selectedModel = string.IsNullOrWhiteSpace(command.Model)
+            ? settings.Model
+            : command.Model.Trim();
+        if (!settings.Models.Contains(selectedModel, StringComparer.OrdinalIgnoreCase))
+            errors["model"] = ["Select a supported AI model."];
         if (errors.Count > 0)
             throw new ValidationException(errors);
     }

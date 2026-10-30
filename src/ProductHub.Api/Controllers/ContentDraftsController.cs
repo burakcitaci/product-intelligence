@@ -28,7 +28,8 @@ public sealed class ContentDraftsController(ContentGenerationService service) : 
                 idempotencyKey ?? "",
                 HttpContext.TraceIdentifier,
                 request.UseRag,
-                request.TopK
+                request.TopK,
+                request.Model
             ),
             cancellationToken
         );
@@ -90,7 +91,8 @@ public sealed class ContentDraftsController(ContentGenerationService service) : 
 public sealed record GenerateDraftRequest(
     string? Language = "de",
     bool UseRag = false,
-    int TopK = 5
+    int TopK = 5,
+    string? Model = null
 );
 
 public sealed record UpdateDraftRequest(

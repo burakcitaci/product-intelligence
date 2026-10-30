@@ -8,7 +8,8 @@ public sealed record GenerateDraftCommand(
     string IdempotencyKey,
     string CorrelationId,
     bool UseRag = false,
-    int TopK = 5
+    int TopK = 5,
+    string? Model = null
 );
 
 public sealed record UpdateDraftCommand(

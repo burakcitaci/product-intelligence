@@ -46,6 +46,10 @@ public static class DependencyInjection
             )
             .Validate(x => !string.IsNullOrWhiteSpace(x.Model), "AI model is required.")
             .Validate(
+                x => x.Models.Length > 0 && x.Models.Contains(x.Model),
+                "AI models must include the default model."
+            )
+            .Validate(
                 x => x.TimeoutSeconds is >= 1 and <= 600,
                 "AI timeout must be between 1 and 600 seconds."
             )

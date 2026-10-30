@@ -5,12 +5,12 @@ using System.Text.Json;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using OllamaSharp;
 using ProductHub.Application.Content;
 
 namespace ProductHub.Infrastructure.Ai;
 
 internal sealed class OllamaContentGenerator(
-    IChatClient chatClient,
     IOptions<AiSettings> settings,
     ILogger<OllamaContentGenerator> logger
 ) : IContentGenerator
@@ -23,6 +23,7 @@ internal sealed class OllamaContentGenerator(
         CancellationToken cancellationToken
     )
     {
+        IChatClient chatClient = new OllamaApiClient(settings.Value.Endpoint, options.Model);
         var productData = JsonSerializer.Serialize(
             new
             {
@@ -86,7 +87,7 @@ internal sealed class OllamaContentGenerator(
                     modelCall.ElapsedMilliseconds,
                     response.Usage?.OutputTokenCount ?? 0,
                     response.Usage?.InputTokenCount ?? 0,
-                    settings.Value.Model,
+                    options.Model,
                     options.Language,
                     attempt
                 );

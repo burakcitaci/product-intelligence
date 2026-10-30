@@ -21,7 +21,7 @@ public sealed record GroundingExcerpt(string Citation, string Text);
 
 public sealed record ProductFact(string Name, string Value, string? Unit);
 
-public sealed record GenerationOptions(string Language, string PromptVersion);
+public sealed record GenerationOptions(string Language, string PromptVersion, string Model);
 
 public sealed record GeneratedProductContent(
     string Title,

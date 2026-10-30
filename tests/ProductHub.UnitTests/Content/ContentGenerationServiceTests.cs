@@ -31,6 +31,28 @@ public sealed class ContentGenerationServiceTests
     }
 
     [Fact]
+    public async Task GenerateAsync_UsesSelectedModelAndPersistsItForAudit()
+    {
+        var store = new FakeStore { Product = Product.Create("SKU-1", "Bottle", "Acme") };
+        var generator = new FakeGenerator();
+
+        await CreateService(store, generator)
+            .GenerateAsync(
+                new GenerateDraftCommand(
+                    store.Product.Id,
+                    "de",
+                    "key-model",
+                    "trace-model",
+                    Model: "llama3.1:8b"
+                ),
+                CancellationToken.None
+            );
+
+        Assert.Equal("llama3.1:8b", store.Generation!.Model);
+        Assert.Equal("llama3.1:8b", generator.LastOptions!.Model);
+    }
+
+    [Fact]
     public async Task GenerateAsync_ReplaysExistingSuccessfulDraft()
     {
         var product = Product.Create("SKU-1", "Bottle", "Acme");
@@ -145,6 +167,28 @@ public sealed class ContentGenerationServiceTests
         Assert.Equal(0, store.SaveCount);
     }
 
+    [Fact]
+    public async Task GenerateAsync_RejectsUnsupportedModelBeforePersistence()
+    {
+        var store = new FakeStore { Product = Product.Create("SKU-1", "Bottle", "Acme") };
+
+        await Assert.ThrowsAsync<ValidationException>(() =>
+            CreateService(store, new FakeGenerator())
+                .GenerateAsync(
+                    new GenerateDraftCommand(
+                        store.Product.Id,
+                        "de",
+                        "key-model-invalid",
+                        "trace",
+                        Model: "unknown:latest"
+                    ),
+                    CancellationToken.None
+                )
+        );
+
+        Assert.Equal(0, store.SaveCount);
+    }
+
     [Theory]
     [InlineData(0)]
     [InlineData(21)]
@@ -185,6 +229,7 @@ public sealed class ContentGenerationServiceTests
         public Exception? Exception { get; init; }
         public GeneratedProductContent? Result { get; init; }
         public bool HonorCancellation { get; init; }
+        public GenerationOptions? LastOptions { get; private set; }
 
         public Task<GeneratedProductContent> GenerateAsync(
             ProductContentContext context,
@@ -193,6 +238,7 @@ public sealed class ContentGenerationServiceTests
         )
         {
             CallCount++;
+            LastOptions = options;
             if (HonorCancellation)
                 return Task.FromCanceled<GeneratedProductContent>(cancellationToken);
             if (Exception is not null)
