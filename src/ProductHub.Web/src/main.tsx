@@ -38,6 +38,9 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { DataTable } from "@/components/data-table";
+import { AppShell } from "@/components/app-shell";
+import { CatalogOverview } from "@/components/catalog-overview";
+import { Toaster, toast } from "sonner";
 import "./shadcn.css";
 import "./styles.css";
 import "./responsive.css";
@@ -46,6 +49,7 @@ import "./draft-editor.css";
 import "./auth.css";
 import "./calm-admin.css";
 import "./dashboard.css";
+import "./admin.css";
 
 const API =
   import.meta.env.VITE_API_URL ??
@@ -263,7 +267,7 @@ function App() {
   const loadCatalogs = async () => {
     const data = await request<Catalog[]>("/api/catalogs");
     setCatalogs(data);
-    setCatalogId((id) => id || data[0]?.id || "");
+    setCatalogId((id) => id && data.some((catalog) => catalog.id === id) ? id : "");
   };
   const loadProducts = async (forCatalog = catalogId) => {
     const data = await request<{ items: Product[] }>(
@@ -522,6 +526,7 @@ function App() {
       setCatalogId(created.id);
       setCatalogForm({ name: "", description: "" });
       setDialog(null);
+      toast.success("Catalog created");
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -741,6 +746,25 @@ function App() {
   if (currentUser === null) return <Login onLogin={setCurrentUser} />;
   if (currentUser.role !== "Admin")
     return <Storefront user={currentUser} onLogout={logout} />;
+
+  if (!catalogId)
+    return <AppShell user={currentUser} onNavigate={() => setCatalogId("")} onLogout={logout}>
+      <div className="admin-surface">
+        {error && <Alert className="m-6 border-destructive/40 text-destructive"><AlertDescription>{error}</AlertDescription></Alert>}
+        <CatalogOverview catalogs={catalogs} onCreate={() => setDialog("catalog")} onOpen={setCatalogId} />
+        <Dialog open={dialog === "catalog"} onOpenChange={(open) => !open && !busy && setDialog(null)}>
+          <DialogContent>
+            <form className="grid gap-5" onSubmit={createCatalog}>
+              <DialogHeader><DialogTitle>Create catalog</DialogTitle><DialogDescription>Group related products into a focused collection.</DialogDescription></DialogHeader>
+              <Label className="grid gap-2"><span>Name</span><Input required maxLength={120} value={catalogForm.name} onChange={(event) => setCatalogForm((value) => ({ ...value, name: event.target.value }))} placeholder="Outdoor Essentials" /></Label>
+              <Label className="grid gap-2"><span>Description</span><Textarea maxLength={500} value={catalogForm.description} onChange={(event) => setCatalogForm((value) => ({ ...value, description: event.target.value }))} placeholder="What belongs in this catalog?" /></Label>
+              {error && <Alert className="border-destructive/40 text-destructive"><AlertDescription>{error}</AlertDescription></Alert>}
+              <DialogFooter><Button type="button" variant="outline" disabled={busy} onClick={() => setDialog(null)}>Cancel</Button><Button disabled={busy}>{busy ? "Creating…" : "Create catalog"}</Button></DialogFooter>
+            </form>
+          </DialogContent>
+        </Dialog>
+      </div>
+    </AppShell>;
 
   return (
     <div className="app-shell dashboard-shell">
@@ -1652,8 +1676,4 @@ function Storefront({
   );
 }
 
-createRoot(document.getElementById("root")!).render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>,
-);
+createRoot(document.getElementById("root")!).render(<React.StrictMode><App /><Toaster richColors position="top-right" /></React.StrictMode>);
