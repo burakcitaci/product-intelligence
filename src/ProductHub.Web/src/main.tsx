@@ -41,6 +41,7 @@ import { DataTable } from "@/components/data-table";
 import { AppShell } from "@/components/app-shell";
 import { CatalogOverview } from "@/components/catalog-overview";
 import { CatalogDetail } from "@/components/catalog-detail";
+import { ProductSheet } from "@/components/product-sheet";
 import { Toaster, toast } from "sonner";
 import "./shadcn.css";
 import "./styles.css";
@@ -243,6 +244,7 @@ function App() {
     brand: "",
     attributes: "Material: Stainless steel\nColor: Forest green",
   });
+  const [addAnotherProduct, setAddAnotherProduct] = useState(false);
   const [sourceFactsForm, setSourceFactsForm] = useState({
     name: "",
     brand: "",
@@ -551,10 +553,14 @@ function App() {
       });
       await loadProducts(catalogId);
       await loadCatalogs();
-      setSelectedId(created.id);
       setProductForm({ sku: "", name: "", brand: "", attributes: "" });
-      setDialog(null);
       toast.success("Product added");
+      if (addAnotherProduct) {
+        setSelectedId("");
+      } else {
+        setSelectedId(created.id);
+        setDialog(null);
+      }
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -773,7 +779,7 @@ function App() {
       <div className="admin-surface">
         {error && <Alert className="m-6 border-destructive/40 text-destructive"><AlertDescription>{error}</AlertDescription></Alert>}
         <CatalogDetail catalog={activeCatalog} products={products} query={query} onQueryChange={setQuery} onBack={() => setCatalogId("")} onOpenProduct={setSelectedId} onAddProduct={() => setDialog("product")} />
-        <Dialog open={dialog === "product"} onOpenChange={(open) => !open && !busy && setDialog(null)}><DialogContent><form className="grid gap-5" onSubmit={createProduct}><DialogHeader><DialogTitle>Add product</DialogTitle><DialogDescription>Add verified product facts to {activeCatalog.name}.</DialogDescription></DialogHeader><div className="grid gap-4 sm:grid-cols-2"><Label className="grid gap-2"><span>SKU</span><Input required value={productForm.sku} onChange={(event) => setProductForm((value) => ({ ...value, sku: event.target.value }))} /></Label><Label className="grid gap-2"><span>Brand</span><Input required value={productForm.brand} onChange={(event) => setProductForm((value) => ({ ...value, brand: event.target.value }))} /></Label></div><Label className="grid gap-2"><span>Product name</span><Input required value={productForm.name} onChange={(event) => setProductForm((value) => ({ ...value, name: event.target.value }))} /></Label><Label className="grid gap-2"><span>Product facts <small className="font-normal text-muted-foreground">one per line, Name: Value</small></span><Textarea rows={6} value={productForm.attributes} onChange={(event) => setProductForm((value) => ({ ...value, attributes: event.target.value }))} /></Label>{error && <Alert className="border-destructive/40 text-destructive"><AlertDescription>{error}</AlertDescription></Alert>}<DialogFooter><Button type="button" variant="outline" onClick={() => setDialog(null)}>Cancel</Button><Button disabled={busy}>{busy ? "Adding…" : "Add product"}</Button></DialogFooter></form></DialogContent></Dialog>
+        <ProductSheet open={dialog === "product"} catalogName={activeCatalog.name} form={productForm} busy={busy} error={error} addAnother={addAnotherProduct} onOpenChange={(open) => { if (!open && !busy) setDialog(null); }} onFormChange={setProductForm} onAddAnotherChange={setAddAnotherProduct} onSubmit={createProduct} />
       </div>
     </AppShell>;
 
