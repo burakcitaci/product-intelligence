@@ -46,12 +46,7 @@ import { ProductDetail } from "@/components/product-detail";
 import { Toaster, toast } from "sonner";
 import "./shadcn.css";
 import "./styles.css";
-import "./responsive.css";
-import "./catalog.css";
-import "./draft-editor.css";
 import "./auth.css";
-import "./calm-admin.css";
-import "./dashboard.css";
 import "./admin.css";
 
 const API =
@@ -225,6 +220,9 @@ function App() {
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(false);
   const [generating, setGenerating] = useState(false);
+  const [loadingCatalogs, setLoadingCatalogs] = useState(false);
+  const [loadingProducts, setLoadingProducts] = useState(false);
+  const [loadingDrafts, setLoadingDrafts] = useState(false);
   const [error, setError] = useState("");
   const [dialog, setDialog] = useState<"catalog" | "product" | "facts" | "generate" | null>(null);
   const [useRag, setUseRag] = useState(false);
@@ -270,42 +268,42 @@ function App() {
   }, [products, query]);
 
   const loadCatalogs = async () => {
-    const data = await request<Catalog[]>("/api/catalogs");
-    setCatalogs(data);
-    setCatalogId((id) => id && data.some((catalog) => catalog.id === id) ? id : "");
+    setLoadingCatalogs(true);
+    try {
+      const data = await request<Catalog[]>("/api/catalogs");
+      setCatalogs(data);
+      setCatalogId((id) => id && data.some((catalog) => catalog.id === id) ? id : "");
+    } finally {
+      setLoadingCatalogs(false);
+    }
   };
   const loadProducts = async (forCatalog = catalogId) => {
-    const data = await request<{ items: Product[] }>(
-      `/api/products?page=1&pageSize=100${forCatalog ? `&catalogId=${forCatalog}` : ""}`,
-    );
-    setProducts(data.items);
-    setSelectedId((id) => data.items.some((product) => product.id === id) ? id : "");
+    setLoadingProducts(true);
+    try {
+      const data = await request<{ items: Product[] }>(
+        `/api/products?page=1&pageSize=100${forCatalog ? `&catalogId=${forCatalog}` : ""}`,
+      );
+      setProducts(data.items);
+      setSelectedId((id) => data.items.some((product) => product.id === id) ? id : "");
+    } finally {
+      setLoadingProducts(false);
+    }
   };
   const loadDrafts = async (productId: string) => {
-    const data = await request<Draft[]>(`/api/products/${productId}/drafts`);
-    setDrafts(data);
-    setGenerations({});
-    setDraftId((id) =>
-      data.some((x) => x.id === id) ? id : (data[0]?.id ?? ""),
-    );
-    const metadata = await Promise.allSettled(
-      data.map(async (item) => {
-        const run = await request<Generation>(
-          `/api/drafts/${item.id}/generation`,
-        );
+    setLoadingDrafts(true);
+    try {
+      const data = await request<Draft[]>(`/api/products/${productId}/drafts`);
+      setDrafts(data);
+      setGenerations({});
+      setDraftId((id) => data.some((x) => x.id === id) ? id : (data[0]?.id ?? ""));
+      const metadata = await Promise.allSettled(data.map(async (item) => {
+        const run = await request<Generation>(`/api/drafts/${item.id}/generation`);
         return [item.id, run] as const;
-      }),
-    );
-    setGenerations(
-      Object.fromEntries(
-        metadata
-          .filter(
-            (result): result is PromiseFulfilledResult<readonly [string, Generation]> =>
-              result.status === "fulfilled",
-          )
-          .map((result) => result.value),
-      ),
-    );
+      }));
+      setGenerations(Object.fromEntries(metadata.filter((result): result is PromiseFulfilledResult<readonly [string, Generation]> => result.status === "fulfilled").map((result) => result.value)));
+    } finally {
+      setLoadingDrafts(false);
+    }
   };
   useEffect(() => {
     request<CurrentUser>("/api/auth/me")
@@ -365,8 +363,10 @@ function App() {
       await loadKnowledgeDocuments(selected.id);
       setKnowledgeFile(null);
       setUseRag(true);
+      toast.success("Knowledge document uploaded");
     } catch (e) {
       setError((e as Error).message);
+      toast.error("Knowledge upload failed");
     } finally {
       setBusy(false);
     }
@@ -383,8 +383,10 @@ function App() {
       );
       await loadKnowledgeDocuments(selected.id);
       if (knowledgeDocuments.length <= 1) setUseRag(false);
+      toast.success("Knowledge document removed");
     } catch (e) {
       setError((e as Error).message);
+      toast.error("Could not remove document");
     } finally {
       setBusy(false);
     }
@@ -407,8 +409,10 @@ function App() {
       await loadDrafts(selected.id);
       setDraftId(created.id);
       setDialog(null);
+      toast.success("Draft generated");
     } catch (e) {
       setError((e as Error).message);
+      toast.error("Draft generation failed");
     } finally {
       setBusy(false);
       setGenerating(false);
@@ -432,8 +436,10 @@ function App() {
               : x,
         ),
       );
+      toast.success(action === "approve" ? "Draft approved" : "Draft rejected");
     } catch (e) {
       setError((e as Error).message);
+      toast.error("Draft review failed");
     } finally {
       setBusy(false);
     }
@@ -457,8 +463,10 @@ function App() {
         ),
       );
       setDraftId(updated.id);
+      toast.success("Current draft updated");
     } catch (e) {
       setError((e as Error).message);
+      toast.error("Could not update current draft");
     } finally {
       setBusy(false);
     }
@@ -515,8 +523,10 @@ function App() {
         items.map((x) => (x.id === updated.id ? updated : x)),
       );
       setEditingDraft(false);
+      toast.success("Draft saved");
     } catch (e) {
       setError((e as Error).message);
+      toast.error("Could not save draft");
     } finally {
       setBusy(false);
     }
@@ -537,6 +547,7 @@ function App() {
       toast.success("Catalog created");
     } catch (e) {
       setError((e as Error).message);
+      toast.error("Could not create catalog");
     } finally {
       setBusy(false);
     }
@@ -568,6 +579,7 @@ function App() {
       }
     } catch (e) {
       setError((e as Error).message);
+      toast.error("Could not add product");
     } finally {
       setBusy(false);
     }
@@ -599,8 +611,10 @@ function App() {
       });
       setProducts((items) => items.map((item) => (item.id === updated.id ? updated : item)));
       setDialog(null);
+      toast.success("Source facts updated");
     } catch (e) {
       setError((e as Error).message);
+      toast.error("Could not update source facts");
     } finally {
       setBusy(false);
     }
@@ -764,7 +778,7 @@ function App() {
     return <AppShell user={currentUser} onNavigate={() => setCatalogId("")} onLogout={logout}>
       <div className="admin-surface">
         {error && <Alert className="m-6 border-destructive/40 text-destructive"><AlertDescription>{error}</AlertDescription></Alert>}
-        <CatalogOverview catalogs={catalogs} onCreate={() => setDialog("catalog")} onOpen={(id) => { setSelectedId(""); setQuery(""); setCatalogId(id); }} />
+        <CatalogOverview catalogs={catalogs} loading={loadingCatalogs} onCreate={() => setDialog("catalog")} onOpen={(id) => { setSelectedId(""); setQuery(""); setCatalogId(id); }} />
         <Dialog open={dialog === "catalog"} onOpenChange={(open) => !open && !busy && setDialog(null)}>
           <DialogContent>
             <form className="grid gap-5" onSubmit={createCatalog}>
@@ -783,7 +797,7 @@ function App() {
     return <AppShell user={currentUser} onNavigate={() => { setCatalogId(""); setSelectedId(""); }} onLogout={logout}>
       <div className="admin-surface">
         {error && <Alert className="m-6 border-destructive/40 text-destructive"><AlertDescription>{error}</AlertDescription></Alert>}
-        <CatalogDetail catalog={activeCatalog} products={products} query={query} onQueryChange={setQuery} onBack={() => setCatalogId("")} onOpenProduct={setSelectedId} onAddProduct={() => setDialog("product")} />
+        <CatalogDetail catalog={activeCatalog} products={products} loading={loadingProducts} query={query} onQueryChange={setQuery} onBack={() => setCatalogId("")} onOpenProduct={setSelectedId} onAddProduct={() => setDialog("product")} />
         <ProductSheet open={dialog === "product"} catalogName={activeCatalog.name} form={productForm} busy={busy} error={error} addAnother={addAnotherProduct} onOpenChange={(open) => { if (!open && !busy) setDialog(null); }} onFormChange={setProductForm} onAddAnotherChange={setAddAnotherProduct} onSubmit={createProduct} />
       </div>
     </AppShell>;
@@ -791,7 +805,7 @@ function App() {
   if (selected && activeCatalog)
     return <AppShell user={currentUser} onNavigate={() => { setCatalogId(""); setSelectedId(""); }} onLogout={logout}>
       <div className="admin-surface">
-        <ProductDetail product={selected} catalogName={activeCatalog.name} language={language} drafts={drafts} languageDrafts={languageDrafts} draft={draft} editing={editingDraft} form={draftForm} generating={generating} busy={busy} error={error} onBack={() => setSelectedId("")} onLanguageChange={setLanguage} onSelectDraft={setDraftId} onEditFacts={openSourceFacts} onNewDraft={openGenerate} onEditDraft={beginEditDraft} onCancelEdit={() => setEditingDraft(false)} onFormChange={setDraftForm} onSaveDraft={saveDraft} onReview={review} />
+        <ProductDetail product={selected} catalogName={activeCatalog.name} language={language} drafts={drafts} languageDrafts={languageDrafts} draft={draft} editing={editingDraft} form={draftForm} generating={generating} loading={loadingDrafts} busy={busy} error={error} onBack={() => setSelectedId("")} onLanguageChange={setLanguage} onSelectDraft={setDraftId} onEditFacts={openSourceFacts} onNewDraft={openGenerate} onEditDraft={beginEditDraft} onCancelEdit={() => setEditingDraft(false)} onFormChange={setDraftForm} onSaveDraft={saveDraft} onReview={review} />
         <Dialog open={dialog === "facts"} onOpenChange={(open) => !open && !busy && setDialog(null)}><DialogContent><form className="grid gap-5" onSubmit={updateSourceFacts}><DialogHeader><DialogTitle>Edit source facts</DialogTitle><DialogDescription>Maintain the verified specifications used for generation.</DialogDescription></DialogHeader><div className="grid gap-4 sm:grid-cols-2"><Label className="grid gap-2">Product name<Input required value={sourceFactsForm.name} onChange={(event) => setSourceFactsForm((value) => ({ ...value, name: event.target.value }))} /></Label><Label className="grid gap-2">Brand<Input required value={sourceFactsForm.brand} onChange={(event) => setSourceFactsForm((value) => ({ ...value, brand: event.target.value }))} /></Label></div><Label className="grid gap-2">Source facts <small className="font-normal text-muted-foreground">one per line: Name: Value | Unit</small><Textarea rows={10} value={sourceFactsForm.attributes} onChange={(event) => setSourceFactsForm((value) => ({ ...value, attributes: event.target.value }))} /></Label>{error && <Alert className="border-destructive/40 text-destructive"><AlertDescription>{error}</AlertDescription></Alert>}<DialogFooter><Button type="button" variant="outline" onClick={() => setDialog(null)}>Cancel</Button><Button disabled={busy}>{busy ? "Saving…" : "Save source facts"}</Button></DialogFooter></form></DialogContent></Dialog>
         <Dialog open={dialog === "generate"} onOpenChange={(open) => !open && !busy && setDialog(null)}><DialogContent className="max-h-[calc(100dvh-2rem)] max-w-2xl overflow-y-auto"><div className="grid gap-5"><DialogHeader><DialogTitle>New {language === "de" ? "German" : "English"} draft</DialogTitle><DialogDescription>Choose the grounding source for this generation.</DialogDescription></DialogHeader><div className="grid gap-3 sm:grid-cols-2" role="radiogroup" aria-label="Grounding mode"><Label className={!useRag ? "flex min-h-11 cursor-pointer items-start gap-3 rounded-lg border border-primary bg-primary/5 p-4 ring-1 ring-primary" : "flex min-h-11 cursor-pointer items-start gap-3 rounded-lg border p-4"}><input className="mt-1 size-4 accent-primary" type="radio" checked={!useRag} onChange={() => setUseRag(false)} /><span><strong className="block">Facts only</strong><small className="font-normal text-muted-foreground">Use the structured product record.</small></span></Label><Label className={useRag ? "flex min-h-11 cursor-pointer items-start gap-3 rounded-lg border border-primary bg-primary/5 p-4 ring-1 ring-primary" : "flex min-h-11 cursor-pointer items-start gap-3 rounded-lg border p-4"}><input className="mt-1 size-4 accent-primary" type="radio" checked={useRag} onChange={() => setUseRag(true)} /><span><strong className="block">Facts + knowledge</strong><small className="font-normal text-muted-foreground">Include retrieved product documents.</small></span></Label></div>{useRag && <Label className="grid gap-2">Top-K chunks<Input type="number" min={1} max={20} value={topK} onChange={(event) => setTopK(Math.min(20, Math.max(1, Number(event.target.value) || 1)))} /></Label>}<div className="grid gap-3 rounded-lg border p-4"><div className="flex items-center justify-between"><strong>Product knowledge</strong><Badge variant="outline">{knowledgeDocuments.length} documents</Badge></div>{knowledgeDocuments.map((document) => <div className="flex min-h-11 items-center gap-3 rounded-md bg-muted p-2" key={document.id}><span className="min-w-0 flex-1 truncate text-sm">{document.fileName}</span><Button type="button" size="icon" variant="ghost" aria-label={`Remove ${document.fileName}`} onClick={() => deleteKnowledge(document)}><Trash2 /></Button></div>)}<Label className="grid gap-2">Upload instructions<Input type="file" accept=".txt,.md,.pdf" onChange={(event) => setKnowledgeFile(event.target.files?.[0] ?? null)} /></Label><Button type="button" variant="outline" disabled={busy || !knowledgeFile} onClick={uploadKnowledge}><Upload />Upload and index</Button></div>{error && <Alert className="border-destructive/40 text-destructive"><AlertDescription>{error}</AlertDescription></Alert>}<DialogFooter><Button type="button" variant="outline" onClick={() => setDialog(null)}>Cancel</Button><Button type="button" disabled={busy || (useRag && knowledgeDocuments.length === 0)} onClick={generate}><Sparkles />Generate draft</Button></DialogFooter></div></DialogContent></Dialog>
       </div>
