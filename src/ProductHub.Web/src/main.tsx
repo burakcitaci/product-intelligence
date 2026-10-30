@@ -40,6 +40,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { DataTable } from "@/components/data-table";
 import { AppShell } from "@/components/app-shell";
 import { CatalogOverview } from "@/components/catalog-overview";
+import { CatalogDetail } from "@/components/catalog-detail";
 import { Toaster, toast } from "sonner";
 import "./shadcn.css";
 import "./styles.css";
@@ -274,7 +275,7 @@ function App() {
       `/api/products?page=1&pageSize=100${forCatalog ? `&catalogId=${forCatalog}` : ""}`,
     );
     setProducts(data.items);
-    setSelectedId(data.items[0]?.id || "");
+    setSelectedId((id) => data.items.some((product) => product.id === id) ? id : "");
   };
   const loadDrafts = async (productId: string) => {
     const data = await request<Draft[]>(`/api/products/${productId}/drafts`);
@@ -553,6 +554,7 @@ function App() {
       setSelectedId(created.id);
       setProductForm({ sku: "", name: "", brand: "", attributes: "" });
       setDialog(null);
+      toast.success("Product added");
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -751,7 +753,7 @@ function App() {
     return <AppShell user={currentUser} onNavigate={() => setCatalogId("")} onLogout={logout}>
       <div className="admin-surface">
         {error && <Alert className="m-6 border-destructive/40 text-destructive"><AlertDescription>{error}</AlertDescription></Alert>}
-        <CatalogOverview catalogs={catalogs} onCreate={() => setDialog("catalog")} onOpen={setCatalogId} />
+        <CatalogOverview catalogs={catalogs} onCreate={() => setDialog("catalog")} onOpen={(id) => { setSelectedId(""); setQuery(""); setCatalogId(id); }} />
         <Dialog open={dialog === "catalog"} onOpenChange={(open) => !open && !busy && setDialog(null)}>
           <DialogContent>
             <form className="grid gap-5" onSubmit={createCatalog}>
@@ -763,6 +765,15 @@ function App() {
             </form>
           </DialogContent>
         </Dialog>
+      </div>
+    </AppShell>;
+
+  if (!selectedId && activeCatalog)
+    return <AppShell user={currentUser} onNavigate={() => { setCatalogId(""); setSelectedId(""); }} onLogout={logout}>
+      <div className="admin-surface">
+        {error && <Alert className="m-6 border-destructive/40 text-destructive"><AlertDescription>{error}</AlertDescription></Alert>}
+        <CatalogDetail catalog={activeCatalog} products={products} query={query} onQueryChange={setQuery} onBack={() => setCatalogId("")} onOpenProduct={setSelectedId} onAddProduct={() => setDialog("product")} />
+        <Dialog open={dialog === "product"} onOpenChange={(open) => !open && !busy && setDialog(null)}><DialogContent><form className="grid gap-5" onSubmit={createProduct}><DialogHeader><DialogTitle>Add product</DialogTitle><DialogDescription>Add verified product facts to {activeCatalog.name}.</DialogDescription></DialogHeader><div className="grid gap-4 sm:grid-cols-2"><Label className="grid gap-2"><span>SKU</span><Input required value={productForm.sku} onChange={(event) => setProductForm((value) => ({ ...value, sku: event.target.value }))} /></Label><Label className="grid gap-2"><span>Brand</span><Input required value={productForm.brand} onChange={(event) => setProductForm((value) => ({ ...value, brand: event.target.value }))} /></Label></div><Label className="grid gap-2"><span>Product name</span><Input required value={productForm.name} onChange={(event) => setProductForm((value) => ({ ...value, name: event.target.value }))} /></Label><Label className="grid gap-2"><span>Product facts <small className="font-normal text-muted-foreground">one per line, Name: Value</small></span><Textarea rows={6} value={productForm.attributes} onChange={(event) => setProductForm((value) => ({ ...value, attributes: event.target.value }))} /></Label>{error && <Alert className="border-destructive/40 text-destructive"><AlertDescription>{error}</AlertDescription></Alert>}<DialogFooter><Button type="button" variant="outline" onClick={() => setDialog(null)}>Cancel</Button><Button disabled={busy}>{busy ? "Adding…" : "Add product"}</Button></DialogFooter></form></DialogContent></Dialog>
       </div>
     </AppShell>;
 
