@@ -23,6 +23,29 @@ body { min-width: 320px; }
   line-height: 2rem;
 }
 
+.tablecn { display: grid; gap: 0.75rem; }
+.tablecn-toolbar, .tablecn-footer, .tablecn-footer > div { display: flex; align-items: center; }
+.tablecn-toolbar, .tablecn-footer { justify-content: space-between; gap: 0.75rem; }
+.tablecn-search { position: relative; width: min(22rem, 100%); }
+.tablecn-search > svg { position: absolute; top: 50%; left: 0.75rem; z-index: 1; width: 1rem; height: 1rem; color: var(--muted-foreground); transform: translateY(-50%); pointer-events: none; }
+.tablecn-search input { padding-left: 2.25rem; }
+.tablecn-frame { overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); }
+.tablecn-sort { display: inline-flex; align-items: center; gap: 0.4rem; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.tablecn-sort span { color: var(--muted-foreground); font-size: 0.75rem; }
+.tablecn-empty { height: 8rem; text-align: center; color: var(--muted-foreground); }
+.tablecn-footer { color: var(--muted-foreground); font-size: 0.8125rem; }
+.tablecn-footer > div { gap: 0.5rem; }
+.tablecn-checkbox { width: 1rem; height: 1rem; margin: 0; accent-color: var(--primary); cursor: pointer; }
+.tablecn-action-bar { position: fixed; bottom: 1.5rem; left: 50%; z-index: 50; display: flex; align-items: center; gap: 0.35rem; padding: 0.45rem 0.55rem 0.45rem 0.9rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); color: var(--card-foreground); box-shadow: 0 10px 30px rgb(0 0 0 / 14%); transform: translateX(-50%); }
+.tablecn-action-bar strong { white-space: nowrap; font-size: 0.8125rem; }
+.tablecn-action-divider { width: 1px; height: 1.5rem; margin: 0 0.25rem; background: var(--border); }
+
+@media (max-width: 640px) {
+  .tablecn-toolbar { align-items: stretch; flex-direction: column; }
+  .tablecn-search { width: 100%; }
+  .tablecn-action-bar { bottom: 0.75rem; max-width: calc(100vw - 1.5rem); overflow-x: auto; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; }
 }

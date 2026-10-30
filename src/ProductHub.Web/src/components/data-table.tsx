@@ -33,6 +33,7 @@ type DataTableProps<TData, TValue> = {
   emptyMessage?: string;
   pageSize?: number;
   getRowId?: (row: TData, index: number) => string;
+  enableRowSelection?: boolean;
   renderSelectedActions?: (
     rows: TData[],
     clearSelection: () => void,
@@ -74,6 +75,7 @@ export function DataTable<TData, TValue>({
   emptyMessage = "No results.",
   pageSize = 5,
   getRowId,
+  enableRowSelection = true,
   renderSelectedActions,
 }: DataTableProps<TData, TValue>) {
   const [sorting, setSorting] = React.useState<SortingState>([]);
@@ -106,8 +108,8 @@ export function DataTable<TData, TValue>({
     [],
   );
   const tableColumns = React.useMemo(
-    () => [selectionColumn, ...columns],
-    [columns, selectionColumn],
+    () => enableRowSelection ? [selectionColumn, ...columns] : columns,
+    [columns, enableRowSelection, selectionColumn],
   );
 
   const table = useReactTable({
@@ -120,7 +122,7 @@ export function DataTable<TData, TValue>({
     onColumnVisibilityChange: setColumnVisibility,
     onGlobalFilterChange: setGlobalFilter,
     onRowSelectionChange: setRowSelection,
-    enableRowSelection: true,
+    enableRowSelection,
     getRowId,
     getCoreRowModel: getCoreRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
@@ -237,7 +239,7 @@ export function DataTable<TData, TValue>({
         </div>
       </div>
 
-      {selectedRows.length > 0 && (
+      {enableRowSelection && selectedRows.length > 0 && (
         <div className="tablecn-action-bar" role="region" aria-label="Selected rows actions">
           <strong>{selectedRows.length} selected</strong>
           <span className="tablecn-action-divider" aria-hidden="true" />

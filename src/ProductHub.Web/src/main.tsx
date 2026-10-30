@@ -805,7 +805,43 @@ function App() {
   if (selected && activeCatalog)
     return <AppShell user={currentUser} onNavigate={() => { setCatalogId(""); setSelectedId(""); }} onLogout={logout}>
       <div className="admin-surface">
-        <ProductDetail product={selected} catalogName={activeCatalog.name} language={language} drafts={drafts} languageDrafts={languageDrafts} draft={draft} editing={editingDraft} form={draftForm} generating={generating} loading={loadingDrafts} busy={busy} error={error} onBack={() => setSelectedId("")} onLanguageChange={setLanguage} onSelectDraft={setDraftId} onReviewMany={(ids, action) => reviewMany(languageDrafts.filter((item) => ids.includes(item.id)), action, () => undefined)} onMakeCurrent={(id) => makeCurrent(languageDrafts.find((item) => item.id === id)!)} onEditFacts={openSourceFacts} onNewDraft={openGenerate} onEditDraft={beginEditDraft} onCancelEdit={() => setEditingDraft(false)} onFormChange={setDraftForm} onSaveDraft={saveDraft} onReview={review} />
+        <ProductDetail
+          product={selected}
+          catalogName={activeCatalog.name}
+          language={language}
+          drafts={drafts}
+          languageDrafts={languageDrafts}
+          draft={draft}
+          draftTables={
+            <Tabs defaultValue="history" className="mt-6">
+              <TabsList>
+                <TabsTrigger value="history">Draft history <Badge variant="secondary">{languageDrafts.length}</Badge></TabsTrigger>
+                <TabsTrigger value="audit">Model audit</TabsTrigger>
+              </TabsList>
+              <TabsContent value="history" className="mt-4">
+                <DataTable columns={draftHistoryColumns} data={draftHistoryData} getRowId={(row) => row.draft.id} renderSelectedActions={renderDraftSelectionActions} searchPlaceholder="Filter draft history…" emptyMessage="No draft versions found." />
+              </TabsContent>
+              <TabsContent value="audit" className="mt-4">
+                <DataTable columns={modelAuditColumns} data={modelAuditData} getRowId={(row) => row.draft.id} enableRowSelection={false} searchPlaceholder="Filter model runs…" emptyMessage="No model runs found." />
+              </TabsContent>
+            </Tabs>
+          }
+          editing={editingDraft}
+          form={draftForm}
+          generating={generating}
+          loading={loadingDrafts}
+          busy={busy}
+          error={error}
+          onBack={() => setSelectedId("")}
+          onLanguageChange={setLanguage}
+          onEditFacts={openSourceFacts}
+          onNewDraft={openGenerate}
+          onEditDraft={beginEditDraft}
+          onCancelEdit={() => setEditingDraft(false)}
+          onFormChange={setDraftForm}
+          onSaveDraft={saveDraft}
+          onReview={review}
+        />
         <Dialog open={dialog === "facts"} onOpenChange={(open) => !open && !busy && setDialog(null)}><DialogContent><form className="grid gap-5" onSubmit={updateSourceFacts}><DialogHeader><DialogTitle>Edit source facts</DialogTitle><DialogDescription>Maintain the verified specifications used for generation.</DialogDescription></DialogHeader><div className="grid gap-4 sm:grid-cols-2"><Label className="grid gap-2">Product name<Input required value={sourceFactsForm.name} onChange={(event) => setSourceFactsForm((value) => ({ ...value, name: event.target.value }))} /></Label><Label className="grid gap-2">Brand<Input required value={sourceFactsForm.brand} onChange={(event) => setSourceFactsForm((value) => ({ ...value, brand: event.target.value }))} /></Label></div><Label className="grid gap-2">Source facts <small className="font-normal text-muted-foreground">one per line: Name: Value | Unit</small><Textarea rows={10} value={sourceFactsForm.attributes} onChange={(event) => setSourceFactsForm((value) => ({ ...value, attributes: event.target.value }))} /></Label>{error && <Alert className="border-destructive/40 text-destructive"><AlertDescription>{error}</AlertDescription></Alert>}<DialogFooter><Button type="button" variant="outline" onClick={() => setDialog(null)}>Cancel</Button><Button disabled={busy}>{busy ? "Saving…" : "Save source facts"}</Button></DialogFooter></form></DialogContent></Dialog>
         <Dialog open={dialog === "generate"} onOpenChange={(open) => !open && !busy && setDialog(null)}><DialogContent className="max-h-[calc(100dvh-2rem)] max-w-2xl overflow-y-auto"><div className="grid gap-5"><DialogHeader><DialogTitle>New {language === "de" ? "German" : "English"} draft</DialogTitle><DialogDescription>Choose the grounding source for this generation.</DialogDescription></DialogHeader><div className="grid gap-3 sm:grid-cols-2" role="radiogroup" aria-label="Grounding mode"><Label className={!useRag ? "flex min-h-11 cursor-pointer items-start gap-3 rounded-lg border border-primary bg-primary/5 p-4 ring-1 ring-primary" : "flex min-h-11 cursor-pointer items-start gap-3 rounded-lg border p-4"}><input className="mt-1 size-4 accent-primary" type="radio" checked={!useRag} onChange={() => setUseRag(false)} /><span><strong className="block">Facts only</strong><small className="font-normal text-muted-foreground">Use the structured product record.</small></span></Label><Label className={useRag ? "flex min-h-11 cursor-pointer items-start gap-3 rounded-lg border border-primary bg-primary/5 p-4 ring-1 ring-primary" : "flex min-h-11 cursor-pointer items-start gap-3 rounded-lg border p-4"}><input className="mt-1 size-4 accent-primary" type="radio" checked={useRag} onChange={() => setUseRag(true)} /><span><strong className="block">Facts + knowledge</strong><small className="font-normal text-muted-foreground">Include retrieved product documents.</small></span></Label></div>{useRag && <Label className="grid gap-2">Top-K chunks<Input type="number" min={1} max={20} value={topK} onChange={(event) => setTopK(Math.min(20, Math.max(1, Number(event.target.value) || 1)))} /></Label>}<div className="grid gap-3 rounded-lg border p-4"><div className="flex items-center justify-between"><strong>Product knowledge</strong><Badge variant="outline">{knowledgeDocuments.length} documents</Badge></div>{knowledgeDocuments.map((document) => <div className="flex min-h-11 items-center gap-3 rounded-md bg-muted p-2" key={document.id}><span className="min-w-0 flex-1 truncate text-sm">{document.fileName}</span><Button type="button" size="icon" variant="ghost" aria-label={`Remove ${document.fileName}`} onClick={() => deleteKnowledge(document)}><Trash2 /></Button></div>)}<Label className="grid gap-2">Upload instructions<Input type="file" accept=".txt,.md,.pdf" onChange={(event) => setKnowledgeFile(event.target.files?.[0] ?? null)} /></Label><Button type="button" variant="outline" disabled={busy || !knowledgeFile} onClick={uploadKnowledge}><Upload />Upload and index</Button></div>{error && <Alert className="border-destructive/40 text-destructive"><AlertDescription>{error}</AlertDescription></Alert>}<DialogFooter><Button type="button" variant="outline" onClick={() => setDialog(null)}>Cancel</Button><Button type="button" disabled={busy || (useRag && knowledgeDocuments.length === 0)} onClick={generate}><Sparkles />Generate draft</Button></DialogFooter></div></DialogContent></Dialog>
       </div>
