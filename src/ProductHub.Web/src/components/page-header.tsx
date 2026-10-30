@@ -11,8 +11,8 @@ type PageHeaderProps = {
 };
 
 export function PageHeader({ breadcrumbs, title, subtitle, action }: PageHeaderProps) {
-  return <header className="page-header flex flex-col gap-5 border-b pb-6 sm:flex-row sm:items-end sm:justify-between">
-    <div className="grid gap-3">
+  return <header className="page-header flex flex-col gap-4 border-b pb-4 sm:flex-row sm:items-end sm:justify-between">
+    <div className="grid gap-2">
       <Breadcrumb><BreadcrumbList>{breadcrumbs.map((item, index) => <BreadcrumbItem key={`${item}-${index}`}><BreadcrumbPage className={index < breadcrumbs.length - 1 ? "font-normal text-muted-foreground" : undefined}>{item}</BreadcrumbPage>{index < breadcrumbs.length - 1 && <BreadcrumbSeparator />}</BreadcrumbItem>)}</BreadcrumbList></Breadcrumb>
       <div><h1 className="text-2xl font-semibold tracking-tight">{title}</h1>{subtitle && <p className="mt-1 max-w-2xl text-sm text-muted-foreground">{subtitle}</p>}</div>
     </div>

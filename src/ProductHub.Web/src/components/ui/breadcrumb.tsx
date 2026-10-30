@@ -16,7 +16,7 @@ function BreadcrumbItem({ className, ...props }: React.ComponentProps<"li">) {
 }
 
 function BreadcrumbLink({ className, ...props }: React.ComponentProps<"button">) {
-  return <button className={cn("rounded-sm hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring", className)} {...props} />;
+  return <button className={cn("rounded-md hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring", className)} {...props} />;
 }
 
 function BreadcrumbPage({ className, ...props }: React.ComponentProps<"span">) {
