@@ -43,6 +43,7 @@ import { CatalogOverview } from "@/components/catalog-overview";
 import { CatalogDetail } from "@/components/catalog-detail";
 import { ProductSheet } from "@/components/product-sheet";
 import { ProductDetail } from "@/components/product-detail";
+import { ViewerDashboard } from "@/components/viewer-dashboard";
 import { Toaster, toast } from "sonner";
 import "./shadcn.css";
 import "./styles.css";
@@ -1649,112 +1650,19 @@ function Storefront({
           badge: "English description missing",
           facts: "Product facts",
         };
-  return (
-    <div className="storefront">
-      <header>
-        <div className="brand-mark">PI</div>
-        <div>
-          <p className="eyebrow">{text.catalog}</p>
-          <h1>{text.collections}</h1>
-        </div>
-        <div className="language-switch" aria-label="Content language">
-          <Button
-            variant="ghost"
-            className={language === "de" ? "active" : ""}
-            onClick={() => setLanguage("de")}
-          >
-            DE
-          </Button>
-          <Button
-            variant="ghost"
-            className={language === "en" ? "active" : ""}
-            onClick={() => setLanguage("en")}
-          >
-            EN
-          </Button>
-        </div>
-        <div className="account-menu">
-          <span>
-            <strong>{user.displayName}</strong>
-            <small>{text.viewer}</small>
-          </span>
-          <Button variant="outline" size="sm" onClick={onLogout}>
-            {text.signout}
-          </Button>
-        </div>
-      </header>
-      <main>
-        <nav className="storefront-tabs" aria-label="Catalogs">
-          {catalogs.map((x) => (
-            <Button
-              variant="ghost"
-              key={x.id}
-              className={x.id === catalogId ? "active" : ""}
-              onClick={() => setCatalogId(x.id)}
-            >
-              {x.name}
-              <small>
-                {x.productCount} {text.products}
-              </small>
-            </Button>
-          ))}
-        </nav>
-        <section className="storefront-content">
-          {error && (
-            <Alert className="error-banner">
-              <AlertDescription>{error}</AlertDescription>
-            </Alert>
-          )}
-          <div className="collection-head">
-            <p className="eyebrow">
-              {text.curated} · {language.toUpperCase()}
-            </p>
-            <h2>{active?.name}</h2>
-            <p>{active?.description}</p>
-          </div>
-          <div className="storefront-grid">
-            {products.map((product) => (
-              <Card className="store-product" key={product.id}>
-                <div className="store-product-art">
-                  {product.name.slice(0, 2).toUpperCase()}
-                </div>
-                <p className="eyebrow">
-                  {product.brand} · {product.sku}
-                </p>
-                <h3>{product.approvedContent?.title ?? product.name}</h3>
-                <p>
-                  {product.approvedContent?.shortDescription ?? text.waiting}
-                </p>
-                {product.approvedContent ? (
-                  <ul>
-                    {product.approvedContent.highlights.map((x) => (
-                      <li key={x}>{x}</li>
-                    ))}
-                  </ul>
-                ) : (
-                  <span className="awaiting">{text.badge}</span>
-                )}
-                <details>
-                  <summary>{text.facts}</summary>
-                  <dl>
-                    {product.attributes.map((a) => (
-                      <React.Fragment key={a.name}>
-                        <dt>{a.name}</dt>
-                        <dd>
-                          {a.value}
-                          {a.unit ? ` ${a.unit}` : ""}
-                        </dd>
-                      </React.Fragment>
-                    ))}
-                  </dl>
-                </details>
-              </Card>
-            ))}
-          </div>
-        </section>
-      </main>
-    </div>
-  );
+  return <ViewerDashboard
+    user={user}
+    catalogs={catalogs}
+    catalogId={catalogId}
+    activeCatalog={active}
+    products={products}
+    language={language}
+    error={error}
+    text={text}
+    onCatalogChange={setCatalogId}
+    onLanguageChange={setLanguage}
+    onLogout={onLogout}
+  />;
 }
 
 createRoot(document.getElementById("root")!).render(<React.StrictMode><App /><Toaster richColors position="top-right" /></React.StrictMode>);
