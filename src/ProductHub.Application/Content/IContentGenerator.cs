@@ -14,7 +14,8 @@ public sealed record ProductContentContext(
     string Name,
     string Brand,
     IReadOnlyList<ProductFact> Attributes,
-    IReadOnlyList<GroundingExcerpt> Grounding
+    IReadOnlyList<GroundingExcerpt> Grounding,
+    bool IncludeFacts = true
 );
 
 public sealed record GroundingExcerpt(string Citation, string Text);

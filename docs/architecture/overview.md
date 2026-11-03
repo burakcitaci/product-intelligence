@@ -23,6 +23,14 @@ A unique `(ProductId, IdempotencyKey)` index serializes repeated requests. A com
 
 The Application layer owns orchestration and provider-neutral contracts. Infrastructure owns PDF extraction and the Ollama/Qdrant HTTP adapters. SQL Server is authoritative; Qdrant is a rebuildable projection.
 
+## Generation sources and advanced RAG
+
+Generation independently selects structured facts and retrieval mode (None, Naive, Advanced). Name, brand, and SKU always identify the product; excluded attributes are omitted from retrieval queries and generation. Explicit modes take precedence over the legacy `useRag` flag.
+
+Advanced retrieval expands supplied query clauses, retrieves a bounded candidate union, applies BM25 candidate reranking and reciprocal rank fusion, removes near duplicates, and enforces an excerpt budget. SQL validates completed status and product ownership for both paths. Failed or empty retrieval aborts generation.
+
+The generation audit persists facts inclusion and retrieval mode. Prompt v3 handles optional facts while keeping specifications authoritative and reference guidance advisory. See [Generation and RAG](generation-and-rag.md) for the algorithm, API, and rollout.
+
 ## M4 agent workflow
 
 An agent request creates a durable `Running` workflow before model inference. Ollama returns a structured sequence of tool calls. Application code validates tool names, step count, arguments, and execution time before dispatching read-only product lookup or validation tools.
@@ -33,7 +41,7 @@ An agent request creates a durable `Running` workflow before model inference. Ol
 
 The Vite/React client is a separate local process and consumes only HTTP application contracts. It never reads persistence entities or calls Ollama directly. Product selection loads saved drafts and generation metadata; draft creation remains an API operation protected by an idempotency key.
 
-Approve and reject are explicit command endpoints. The domain aggregate permits either transition only from `PendingReview`, making the review decision terminal even when a client retries or another client acts concurrently. CORS is restricted to the two loopback Vite origins used during local development.
+Approve and reject are explicit command endpoints. Approval requires a pending draft; rejection accepts pending or approved drafts and clears the current published flag. Repeated rejection and edits to reviewed drafts return conflict. CORS is restricted to the two loopback Vite origins used during local development.
 
 ## Catalog organization
 

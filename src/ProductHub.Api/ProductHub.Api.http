@@ -28,3 +28,47 @@ Idempotency-Key: manual-generation-1
 }
 
 ###
+### Advanced RAG without structured facts (sign in as administrator first; replace product id)
+POST {{ProductHub.Api_HostAddress}}/api/products/00000000-0000-0000-0000-000000000000/drafts/generate
+Content-Type: application/json
+Idempotency-Key: advanced-no-facts-1
+
+{
+  "language": "en",
+  "includeFacts": false,
+  "retrievalMode": "Advanced",
+  "topK": 5,
+  "model": "qwen3:8b"
+}
+
+### Naive RAG with product facts (requires indexed product knowledge)
+POST {{ProductHub.Api_HostAddress}}/api/products/00000000-0000-0000-0000-000000000000/drafts/generate
+Content-Type: application/json
+Idempotency-Key: naive-with-facts-1
+
+{
+  "language": "de",
+  "includeFacts": true,
+  "retrievalMode": "Naive",
+  "topK": 5
+}
+
+### Identity only: no structured facts and no retrieval
+POST {{ProductHub.Api_HostAddress}}/api/products/00000000-0000-0000-0000-000000000000/drafts/generate
+Content-Type: application/json
+Idempotency-Key: identity-only-1
+
+{
+  "language": "en",
+  "includeFacts": false,
+  "retrievalMode": "None"
+}
+
+### Invalid retrieval selection: HTTP 400
+POST {{ProductHub.Api_HostAddress}}/api/products/00000000-0000-0000-0000-000000000000/drafts/generate
+Content-Type: application/json
+Idempotency-Key: invalid-rag-1
+
+{
+  "retrievalMode": "Unknown"
+}

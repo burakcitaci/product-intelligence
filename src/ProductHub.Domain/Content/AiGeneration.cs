@@ -11,6 +11,8 @@ public enum GroundingMode
 {
     FactsOnly,
     Rag,
+    AdvancedRag,
+    IdentityOnly,
 }
 
 public enum RetrievalStatus
@@ -46,7 +48,9 @@ public sealed class AiGeneration
         PromptVersion = Required(promptVersion, nameof(promptVersion), 100);
         Language = Required(language, nameof(language), 10);
         GroundingMode = groundingMode;
-        RequestedTopK = groundingMode == GroundingMode.Rag ? requestedTopK : null;
+        RequestedTopK = groundingMode is GroundingMode.Rag or GroundingMode.AdvancedRag
+            ? requestedTopK
+            : null;
         RetrievalStatus = RetrievalStatus.NotRequested;
         CorrelationId = Required(correlationId, nameof(correlationId), 100);
         StartedAt = startedAt;
@@ -62,6 +66,7 @@ public sealed class AiGeneration
     public string Language { get; private set; } = null!;
     public GroundingMode GroundingMode { get; private set; }
     public int? RequestedTopK { get; private set; }
+    public bool IncludeFacts { get; private set; } = true;
     public RetrievalStatus RetrievalStatus { get; private set; }
     public long? RetrievalDurationMs { get; private set; }
     public int RetrievedChunkCount { get; private set; }
@@ -87,7 +92,8 @@ public sealed class AiGeneration
         GroundingMode groundingMode,
         string correlationId,
         int? requestedTopK = null,
-        DateTimeOffset? now = null
+        DateTimeOffset? now = null,
+        bool includeFacts = true
     ) =>
         new(
             Guid.NewGuid(),
@@ -101,7 +107,10 @@ public sealed class AiGeneration
             correlationId,
             requestedTopK,
             now ?? DateTimeOffset.UtcNow
-        );
+        )
+        {
+            IncludeFacts = includeFacts,
+        };
 
     public void RecordRetrieval(
         long durationMs,
@@ -110,7 +119,7 @@ public sealed class AiGeneration
         string sourcesJson
     )
     {
-        if (GroundingMode != GroundingMode.Rag)
+        if (GroundingMode is not (GroundingMode.Rag or GroundingMode.AdvancedRag))
             throw new InvalidOperationException("Retrieval is only valid for RAG generations.");
         RetrievalStatus = RetrievalStatus.Succeeded;
         RetrievalDurationMs = Math.Max(0, durationMs);

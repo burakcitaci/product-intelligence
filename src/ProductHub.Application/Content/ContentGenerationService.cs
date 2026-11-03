@@ -24,6 +24,8 @@ public sealed class ContentGenerationService(
     {
         var options = settings.Value;
         Validate(command, options);
+        var retrievalMode = ResolveRetrievalMode(command);
+        var useRag = retrievalMode != RetrievalMode.None;
         var product =
             await store.GetProductAsync(command.ProductId, cancellationToken)
             ?? throw new NotFoundException($"Product '{command.ProductId}' was not found.");
@@ -60,9 +62,15 @@ public sealed class ContentGenerationService(
             selectedModel,
             options.PromptVersion,
             NormalizeLanguage(command.Language),
-            command.UseRag ? GroundingMode.Rag : GroundingMode.FactsOnly,
+            retrievalMode switch
+            {
+                RetrievalMode.Advanced => GroundingMode.AdvancedRag,
+                RetrievalMode.Naive => GroundingMode.Rag,
+                _ => command.IncludeFacts ? GroundingMode.FactsOnly : GroundingMode.IdentityOnly,
+            },
             command.CorrelationId,
-            command.UseRag ? command.TopK : null
+            useRag ? command.TopK : null,
+            includeFacts: command.IncludeFacts
         );
         await store.AddGenerationAsync(generation, cancellationToken);
         try
@@ -77,24 +85,34 @@ public sealed class ContentGenerationService(
         try
         {
             IReadOnlyList<KnowledgeSearchResult> knowledge = [];
-            if (command.UseRag)
+            if (useRag)
             {
                 if (knowledgeSearch is null)
+                {
+                    generation.RecordRetrievalFailure(0, "rag-not-configured");
                     throw new ContentGenerationException(
                         "rag-not-configured",
                         "Knowledge retrieval is not configured."
                     );
+                }
                 var retrieval = Stopwatch.StartNew();
                 try
                 {
                     var query = string.Join(
                         " | ",
                         new[] { product.Sku, product.Name, product.Brand }.Concat(
-                            product.Attributes.Select(x => $"{x.Name}: {x.Value} {x.Unit}")
+                            command.IncludeFacts
+                                ? product.Attributes.Select(x => $"{x.Name}: {x.Value} {x.Unit}")
+                                : []
                         )
                     );
                     knowledge = await knowledgeSearch.SearchAsync(
-                        new SearchKnowledgeQuery(query, command.TopK, product.Id),
+                        new SearchKnowledgeQuery(
+                            query[..Math.Min(query.Length, 2000)],
+                            command.TopK,
+                            product.Id,
+                            retrievalMode
+                        ),
                         cancellationToken
                     );
                     retrieval.Stop();
@@ -147,8 +165,13 @@ public sealed class ContentGenerationService(
                 product.Sku,
                 product.Name,
                 product.Brand,
-                product.Attributes.Select(x => new ProductFact(x.Name, x.Value, x.Unit)).ToArray(),
-                knowledge.Select(x => new GroundingExcerpt(x.Citation, x.Text)).ToArray()
+                command.IncludeFacts
+                    ? product
+                        .Attributes.Select(x => new ProductFact(x.Name, x.Value, x.Unit))
+                        .ToArray()
+                    : [],
+                knowledge.Select(x => new GroundingExcerpt(x.Citation, x.Text)).ToArray(),
+                command.IncludeFacts
             );
             var generated = await generator.GenerateAsync(
                 context,
@@ -337,7 +360,14 @@ public sealed class ContentGenerationService(
             generation.RetrievedChunkCount,
             generation.RetrievedDocumentCount,
             DeserializeSources(generation.RetrievedSourcesJson),
-            generation.RetrievalErrorCode
+            generation.RetrievalErrorCode,
+            generation.IncludeFacts,
+            generation.GroundingMode switch
+            {
+                GroundingMode.AdvancedRag => "Advanced",
+                GroundingMode.Rag => "Naive",
+                _ => "None",
+            }
         );
     }
 
@@ -374,7 +404,14 @@ public sealed class ContentGenerationService(
             ];
         if (command.Language?.Trim().ToLowerInvariant() is not ("de" or "en"))
             errors["language"] = ["Language must be 'de' or 'en'."];
-        if (command.UseRag && command.TopK is < 1 or > 20)
+        if (
+            command.RetrievalMode is not null
+            && !new[] { "none", "naive", "advanced" }.Contains(
+                command.RetrievalMode.Trim().ToLowerInvariant()
+            )
+        )
+            errors["retrievalMode"] = ["Retrieval mode must be None, Naive, or Advanced."];
+        if (ResolveRetrievalMode(command) != RetrievalMode.None && command.TopK is < 1 or > 20)
             errors["topK"] = ["Top-K must be between 1 and 20."];
         var selectedModel = string.IsNullOrWhiteSpace(command.Model)
             ? settings.Model
@@ -384,6 +421,15 @@ public sealed class ContentGenerationService(
         if (errors.Count > 0)
             throw new ValidationException(errors);
     }
+
+    private static RetrievalMode ResolveRetrievalMode(GenerateDraftCommand command) =>
+        command.RetrievalMode?.Trim().ToLowerInvariant() switch
+        {
+            "advanced" => RetrievalMode.Advanced,
+            "naive" => RetrievalMode.Naive,
+            "none" => RetrievalMode.None,
+            _ => command.UseRag ? RetrievalMode.Naive : RetrievalMode.None,
+        };
 
     private static void ValidateGenerated(GeneratedProductContent content)
     {

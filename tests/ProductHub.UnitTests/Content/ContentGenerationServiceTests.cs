@@ -2,9 +2,11 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using ProductHub.Application.Abstractions;
 using ProductHub.Application.Content;
+using ProductHub.Application.Knowledge;
 using ProductHub.Application.Products;
 using ProductHub.Domain.Content;
 using ProductHub.Domain.Products;
+using ProductHub.UnitTests.Knowledge;
 
 namespace ProductHub.UnitTests.Content;
 
@@ -212,15 +214,167 @@ public sealed class ContentGenerationServiceTests
         Assert.Equal(0, store.SaveCount);
     }
 
+    [Theory]
+    [InlineData(true, "None", GroundingMode.FactsOnly)]
+    [InlineData(false, "None", GroundingMode.IdentityOnly)]
+    [InlineData(true, "Naive", GroundingMode.Rag)]
+    [InlineData(false, "Naive", GroundingMode.Rag)]
+    [InlineData(true, "Advanced", GroundingMode.AdvancedRag)]
+    [InlineData(false, "Advanced", GroundingMode.AdvancedRag)]
+    public async Task GenerateAsync_SupportsAllFactsAndRetrievalCombinations(
+        bool includeFacts,
+        string mode,
+        GroundingMode expectedMode
+    )
+    {
+        var product = Product.Create(
+            "SKU-1",
+            "Bottle",
+            "Acme",
+            attributes: [new ProductAttribute("SecretSpecification", "SensitiveValue")]
+        );
+        var store = new FakeStore { Product = product };
+        var knowledge = new TestKnowledgeStore();
+        var doc = knowledge.Add(product.Id, "care.md", "Clean the bottle with water.");
+        var embeddings = new TestEmbeddings();
+        var vectors = new TestVectors { Hits = [new(doc.Chunks.Single().Id, .9f)] };
+        var search = new KnowledgeSearchService(knowledge, embeddings, vectors);
+        var generator = new FakeGenerator();
+        var service = CreateService(store, generator, search);
+        await service.GenerateAsync(
+            new(
+                product.Id,
+                "en",
+                "combination",
+                "trace",
+                IncludeFacts: includeFacts,
+                RetrievalMode: mode
+            ),
+            default
+        );
+
+        var context = generator.LastContext!;
+        Assert.Equal(includeFacts, context.IncludeFacts);
+        Assert.Equal(includeFacts ? 1 : 0, context.Attributes.Count);
+        Assert.Equal("SKU-1", context.Sku);
+        Assert.Equal(mode == "None" ? 0 : 1, context.Grounding.Count);
+        if (!includeFacts)
+            Assert.All(
+                embeddings.Texts,
+                text =>
+                {
+                    Assert.DoesNotContain("SecretSpecification", text);
+                    Assert.DoesNotContain("SensitiveValue", text);
+                }
+            );
+        Assert.Equal(expectedMode, store.Generation!.GroundingMode);
+        Assert.Equal(includeFacts, store.Generation.IncludeFacts);
+        Assert.Equal(mode == "None" ? null : (int?)5, store.Generation.RequestedTopK);
+        var metadata = await service.GetGenerationMetadataAsync(store.Draft!.Id, default);
+        Assert.Equal(mode, metadata.RetrievalMode);
+        Assert.Equal(includeFacts, metadata.IncludeFacts);
+    }
+
+    [Theory]
+    [InlineData(null, true, GroundingMode.Rag)]
+    [InlineData(null, false, GroundingMode.FactsOnly)]
+    [InlineData("None", true, GroundingMode.FactsOnly)]
+    [InlineData("Advanced", false, GroundingMode.AdvancedRag)]
+    public async Task GenerateAsync_ExplicitModeTakesPrecedenceOverLegacyFlag(
+        string? mode,
+        bool legacy,
+        GroundingMode expected
+    )
+    {
+        var product = Product.Create("SKU-1", "Bottle", "Acme");
+        var store = new FakeStore { Product = product };
+        var knowledge = new TestKnowledgeStore();
+        var doc = knowledge.Add(product.Id, "manual.md", "Bottle storage instructions");
+        var search = new KnowledgeSearchService(
+            knowledge,
+            new TestEmbeddings(),
+            new TestVectors { Hits = [new(doc.Chunks.Single().Id, .9f)] }
+        );
+        await CreateService(store, new FakeGenerator(), search)
+            .GenerateAsync(
+                new(product.Id, "en", "legacy", "trace", UseRag: legacy, RetrievalMode: mode),
+                default
+            );
+        Assert.Equal(expected, store.Generation!.GroundingMode);
+    }
+
+    [Theory]
+    [InlineData("Advanced", false)]
+    [InlineData("Naive", true)]
+    public async Task GenerateAsync_RetrievalFailureDoesNotSilentlyFallBack(
+        string mode,
+        bool unavailable
+    )
+    {
+        var product = Product.Create("SKU-1", "Bottle", "Acme");
+        var store = new FakeStore { Product = product };
+        var generator = new FakeGenerator();
+        var search = new KnowledgeSearchService(
+            new TestKnowledgeStore(),
+            new TestEmbeddings(),
+            new TestVectors { Error = unavailable ? new HttpRequestException("Offline") : null }
+        );
+        var error = await Assert.ThrowsAsync<GenerationUnavailableException>(() =>
+            CreateService(store, generator, search)
+                .GenerateAsync(
+                    new(
+                        product.Id,
+                        "en",
+                        "failure",
+                        "trace",
+                        IncludeFacts: false,
+                        RetrievalMode: mode
+                    ),
+                    default
+                )
+        );
+        Assert.Equal(unavailable ? "rag-retrieval-failed" : "rag-no-context", error.ErrorCode);
+        Assert.Equal(RetrievalStatus.Failed, store.Generation!.RetrievalStatus);
+        Assert.Equal(AiGenerationStatus.Failed, store.Generation.Status);
+        Assert.Null(store.Draft);
+        Assert.Equal(0, generator.CallCount);
+    }
+
+    [Theory]
+    [InlineData("Unknown", 5)]
+    [InlineData("Advanced", 0)]
+    [InlineData("Naive", 21)]
+    public async Task GenerateAsync_RejectsInvalidRetrievalOptions(string mode, int topK)
+    {
+        var store = new FakeStore { Product = Product.Create("SKU-1", "Bottle", "Acme") };
+        await Assert.ThrowsAsync<ValidationException>(() =>
+            CreateService(store, new FakeGenerator())
+                .GenerateAsync(
+                    new(
+                        store.Product.Id,
+                        "en",
+                        "invalid",
+                        "trace",
+                        TopK: topK,
+                        RetrievalMode: mode
+                    ),
+                    default
+                )
+        );
+        Assert.Equal(0, store.SaveCount);
+    }
+
     private static ContentGenerationService CreateService(
         FakeStore store,
-        FakeGenerator generator
+        FakeGenerator generator,
+        KnowledgeSearchService? search = null
     ) =>
         new(
             store,
             generator,
             Options.Create(Settings),
-            NullLogger<ContentGenerationService>.Instance
+            NullLogger<ContentGenerationService>.Instance,
+            search
         );
 
     private sealed class FakeGenerator : IContentGenerator
@@ -230,6 +384,7 @@ public sealed class ContentGenerationServiceTests
         public GeneratedProductContent? Result { get; init; }
         public bool HonorCancellation { get; init; }
         public GenerationOptions? LastOptions { get; private set; }
+        public ProductContentContext? LastContext { get; private set; }
 
         public Task<GeneratedProductContent> GenerateAsync(
             ProductContentContext context,
@@ -239,6 +394,7 @@ public sealed class ContentGenerationServiceTests
         {
             CallCount++;
             LastOptions = options;
+            LastContext = context;
             if (HonorCancellation)
                 return Task.FromCanceled<GeneratedProductContent>(cancellationToken);
             if (Exception is not null)

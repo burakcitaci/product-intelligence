@@ -21,7 +21,19 @@ public sealed record DocumentDto(
     string? ErrorCode
 );
 
-public sealed record SearchKnowledgeQuery(string Query, int Limit = 5, Guid? ProductId = null);
+public enum RetrievalMode
+{
+    None,
+    Naive,
+    Advanced,
+}
+
+public sealed record SearchKnowledgeQuery(
+    string Query,
+    int Limit = 5,
+    Guid? ProductId = null,
+    RetrievalMode Mode = RetrievalMode.Naive
+);
 
 public sealed record KnowledgeSearchResult(
     Guid DocumentId,

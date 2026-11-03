@@ -23,7 +23,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Input } from "@/components/ui/input";
+import { SearchField } from "@/components/workspace";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
 type DataTableProps<TData, TValue> = {
@@ -135,15 +135,7 @@ export function DataTable<TData, TValue>({
   return (
     <div className="tablecn">
       <div className="tablecn-toolbar">
-        <div className="tablecn-search">
-          <Search aria-hidden="true" />
-          <Input
-            value={globalFilter}
-            onChange={(event) => setGlobalFilter(event.target.value)}
-            placeholder={searchPlaceholder}
-            aria-label={searchPlaceholder}
-          />
-        </div>
+        <SearchField value={globalFilter} onChange={setGlobalFilter} placeholder={searchPlaceholder} />
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="outline" size="sm">
@@ -177,7 +169,7 @@ export function DataTable<TData, TValue>({
             {table.getHeaderGroups().map((headerGroup) => (
               <TableRow key={headerGroup.id}>
                 {headerGroup.headers.map((header) => (
-                  <TableHead key={header.id}>
+                  <TableHead key={header.id} aria-sort={header.column.getIsSorted() === "asc" ? "ascending" : header.column.getIsSorted() === "desc" ? "descending" : undefined}>
                     {header.isPlaceholder ? null : header.column.getCanSort() ? (
                       <button
                         className="tablecn-sort"

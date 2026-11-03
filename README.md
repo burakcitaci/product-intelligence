@@ -107,13 +107,49 @@ Add `--volumes` only when you intentionally want to remove local SQL Server and 
 1. Sign in as an administrator.
 2. Create or select a catalog.
 3. Add products and factual attributes.
-4. Generate a German or English draft with Ollama.
+4. Choose whether to include product facts, select No RAG, Naive RAG, or Advanced RAG, and generate a German or English draft with Ollama.
 5. Review or edit the generated content.
 6. Approve or reject one or more drafts.
 7. Mark one approved draft as the current published version.
 8. Sign in as the viewer to see the published catalog.
 
-The application records prompt version, model, token usage, latency, status, and correlation ID for every generation.
+The application records prompt version, model, token usage, latency, status, correlation ID, facts inclusion, retrieval mode, and source citations for every generation.
+
+## Generation and RAG options
+
+The generation dialog independently controls **Include product facts** and **Document retrieval**. Name, brand, and SKU are always supplied. Turning facts off removes structured attributes from retrieval queries and the generation prompt.
+
+| Mode | Behavior |
+| --- | --- |
+| No RAG | Generate from identity and optional structured facts, without documents |
+| Naive RAG | One semantic vector search over the selected product's uploaded knowledge |
+| Advanced RAG | Up to three searches, wider candidate retrieval, BM25 candidate reranking, reciprocal rank fusion, near-duplicate removal, and context budgeting |
+
+Both RAG modes require completed, indexed product documents and accept Top-K from 1 to 20 (default 5). Advanced RAG returns up to Top-K excerpts within a 12,000-character retrieved-context budget. It reuses Ollama embeddings and Qdrant; no extra service or reindexing is needed. Retrieval failure stops generation instead of silently falling back.
+
+Without facts and without RAG, generation is limited to product identity. Uploaded guidance remains advisory and must not become invented specifications. Review is required before publishing.
+
+API example for advanced RAG without structured facts:
+
+```json
+{
+  "language": "en",
+  "model": "qwen3:8b",
+  "includeFacts": false,
+  "retrievalMode": "Advanced",
+  "topK": 5
+}
+```
+
+Send this to `POST /api/products/{productId}/drafts/generate` with an administrator session and a fresh `Idempotency-Key` header. Existing requests with `useRag: true` select naive RAG when `retrievalMode` is omitted.
+
+This includes migration `20261103120000_AddGenerationFactsSelection` and defaults to prompt `product-description-v3`. Development startup applies pending migrations; other deployments must apply them before restarting the API:
+
+```bash
+dotnet ef database update --project src/ProductHub.Infrastructure --startup-project src/ProductHub.Api
+```
+
+See [Generation and RAG](docs/architecture/generation-and-rag.md) for all six combinations, ranking details, limits, audit fields, and rollout instructions.
 
 ## telemetry-hub integration
 
@@ -189,5 +225,6 @@ More detail is available in:
 
 - [Architecture overview](docs/architecture/overview.md)
 - [Data model](docs/architecture/data-model.md)
+- [Generation and RAG](docs/architecture/generation-and-rag.md)
 - [Modular-monolith ADR](docs/adr/0001-modular-monolith.md)
 - [Local Ollama ADR](docs/adr/0002-local-ollama.md)

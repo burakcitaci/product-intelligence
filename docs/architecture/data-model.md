@@ -12,6 +12,10 @@ The domain rejects blank core fields and duplicate attribute names. Database con
 
 `AiGenerations` records provider, model, prompt version, language, timings, token counts, status, error code, correlation id, and the caller's idempotency key. `(ProductId, IdempotencyKey)` is unique. Token counts remain nullable because not every provider/model response supplies usage.
 
+Grounding is audited by `GroundingMode` (FactsOnly, IdentityOnly, Rag, AdvancedRag), `IncludeFacts`, requested Top-K, retrieval status/duration, chunk/document counts, source citations/scores, and retrieval error code. The API exposes independent `retrievalMode` as None, Naive, or Advanced. Historical Rag runs map to Naive.
+
+Migration `20261103120000_AddGenerationFactsSelection` adds the boolean facts flag with a true backfill. New requests can persist false without changing authoritative product attributes. Advanced retrieval reuses existing chunks and vector points, without reindexing. See [Generation and RAG](generation-and-rag.md).
+
 ## Content drafts
 
 `ContentDrafts` belongs to a product and exactly one generation. It stores localized title, descriptions, JSON highlights, and a review status. New drafts always start as `PendingReview`; generation never publishes or overwrites catalog content. Highlights use JSON because they are a small ordered value collection and are not queried independently in M2.

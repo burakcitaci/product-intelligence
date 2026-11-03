@@ -9,7 +9,9 @@ public sealed record GenerateDraftCommand(
     string CorrelationId,
     bool UseRag = false,
     int TopK = 5,
-    string? Model = null
+    string? Model = null,
+    bool IncludeFacts = true,
+    string? RetrievalMode = null
 );
 
 public sealed record UpdateDraftCommand(
@@ -53,7 +55,9 @@ public sealed record AiGenerationMetadataDto(
     int RetrievedChunkCount,
     int RetrievedDocumentCount,
     IReadOnlyList<RetrievalSourceDto> RetrievalSources,
-    string? RetrievalErrorCode
+    string? RetrievalErrorCode,
+    bool IncludeFacts,
+    string RetrievalMode
 );
 
 public sealed record RetrievalSourceDto(

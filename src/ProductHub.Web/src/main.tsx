@@ -37,6 +37,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { GenerationSettings, type RetrievalMode } from "@/components/generation-settings";
 import { DataTable } from "@/components/data-table";
 import { AppShell } from "@/components/app-shell";
 import { CatalogOverview } from "@/components/catalog-overview";
@@ -49,6 +50,7 @@ import "./shadcn.css";
 import "./styles.css";
 import "./auth.css";
 import "./admin.css";
+import "./workspace.css";
 
 const API =
   import.meta.env.VITE_API_URL ??
@@ -99,6 +101,8 @@ type Generation = {
   status: string;
   errorCode?: string;
   groundingMode: string;
+  retrievalMode?: RetrievalMode;
+  includeFacts?: boolean;
   requestedTopK?: number;
   retrievalStatus: string;
   retrievalDurationMs?: number;
@@ -133,6 +137,7 @@ type ModelAuditRow = {
   runStatus: string;
   trace: string;
   grounding: string;
+  facts: string;
   topK: string;
   evidence: string;
 };
@@ -227,10 +232,13 @@ function App() {
   const [loadingDrafts, setLoadingDrafts] = useState(false);
   const [error, setError] = useState("");
   const [dialog, setDialog] = useState<"catalog" | "product" | "facts" | "generate" | null>(null);
-  const [useRag, setUseRag] = useState(false);
+  const [retrievalMode, setRetrievalMode] = useState<RetrievalMode>("None");
+  const [includeFacts, setIncludeFacts] = useState(true);
+  const useRag = retrievalMode !== "None";
   const [topK, setTopK] = useState(5);
   const [model, setModel] = useState<(typeof AI_MODELS)[number]>(AI_MODELS[0]);
   const [knowledgeDocuments, setKnowledgeDocuments] = useState<KnowledgeDocument[]>([]);
+  const hasReadyKnowledge = knowledgeDocuments.some((document) => document.status === 1 || String(document.status).toLowerCase() === "completed");
   const [knowledgeFile, setKnowledgeFile] = useState<File | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [editingDraft, setEditingDraft] = useState(false);
@@ -365,7 +373,6 @@ function App() {
       }
       await loadKnowledgeDocuments(selected.id);
       setKnowledgeFile(null);
-      setUseRag(true);
       toast.success("Knowledge document uploaded");
     } catch (e) {
       setError((e as Error).message);
@@ -385,7 +392,6 @@ function App() {
         { method: "DELETE" },
       );
       await loadKnowledgeDocuments(selected.id);
-      if (knowledgeDocuments.length <= 1) setUseRag(false);
       toast.success("Knowledge document removed");
     } catch (e) {
       setError((e as Error).message);
@@ -406,7 +412,7 @@ function App() {
         {
           method: "POST",
           headers: { "Idempotency-Key": crypto.randomUUID() },
-          body: JSON.stringify({ language, useRag, topK, model }),
+          body: JSON.stringify({ language, retrievalMode, includeFacts, topK, model }),
         },
       );
       await loadDrafts(selected.id);
@@ -725,11 +731,12 @@ function App() {
       tokens: (run?.inputTokens ?? 0) + (run?.outputTokens ?? 0),
       runStatus: run?.status ?? "Loading",
       trace: run?.correlationId ?? "",
-      grounding: run?.groundingMode === "Rag" ? "RAG" : "Facts only",
-      topK: run?.groundingMode === "Rag"
+      grounding: !run ? "—" : (run.retrievalMode === "Advanced" || run.groundingMode === "AdvancedRag") ? "Advanced RAG" : (run.retrievalMode === "Naive" || run.groundingMode === "Rag") ? "Naive RAG" : "No RAG",
+      facts: !run ? "—" : run.includeFacts === false ? "Excluded" : "Included",
+      topK: (run?.groundingMode === "Rag" || run?.groundingMode === "AdvancedRag")
         ? `${run.requestedTopK ?? "—"} requested → ${run.retrievedChunkCount} returned`
         : "—",
-      evidence: run?.groundingMode === "Rag"
+      evidence: (run?.groundingMode === "Rag" || run?.groundingMode === "AdvancedRag")
         ? run.retrievalStatus === "Succeeded"
           ? `${run.retrievedChunkCount} chunks · ${run.retrievedDocumentCount} docs`
               + (run.retrievalSources?.length
@@ -745,7 +752,8 @@ function App() {
     { accessorKey: "startedAt", header: "Started", meta: { label: "Started" }, cell: ({ row }) => row.original.startedAt ? new Date(row.original.startedAt).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : "Loading…" },
     { accessorKey: "model", header: "Model", meta: { label: "Model" }, cell: ({ row }) => row.original.model || "—" },
     { accessorKey: "promptVersion", header: "Prompt", meta: { label: "Prompt" }, cell: ({ row }) => row.original.promptVersion || "—" },
-    { accessorKey: "grounding", header: "Grounding", meta: { label: "Grounding" }, cell: ({ row }) => <Badge variant={row.original.grounding === "RAG" ? "default" : "outline"}>{row.original.grounding}</Badge> },
+    { accessorKey: "grounding", header: "Grounding", meta: { label: "Grounding" }, cell: ({ row }) => <Badge variant={row.original.grounding !== "No RAG" && row.original.grounding !== "—" ? "default" : "outline"}>{row.original.grounding}</Badge> },
+    { accessorKey: "facts", header: "Product facts", meta: { label: "Product facts" } },
     { accessorKey: "topK", header: "Top-K", meta: { label: "Top-K" } },
     { accessorKey: "evidence", header: "Evidence", meta: { label: "Evidence" }, cell: ({ row }) => {
       const run = row.original.run;
@@ -846,7 +854,7 @@ function App() {
           onReview={review}
         />
         <Dialog open={dialog === "facts"} onOpenChange={(open) => !open && !busy && setDialog(null)}><DialogContent><form className="grid gap-5" onSubmit={updateSourceFacts}><DialogHeader><DialogTitle>Edit source facts</DialogTitle><DialogDescription>Maintain the verified specifications used for generation.</DialogDescription></DialogHeader><div className="grid gap-4 sm:grid-cols-2"><Label className="grid gap-2">Product name<Input required value={sourceFactsForm.name} onChange={(event) => setSourceFactsForm((value) => ({ ...value, name: event.target.value }))} /></Label><Label className="grid gap-2">Brand<Input required value={sourceFactsForm.brand} onChange={(event) => setSourceFactsForm((value) => ({ ...value, brand: event.target.value }))} /></Label></div><Label className="grid gap-2">Source facts <small className="font-normal text-muted-foreground">one per line: Name: Value | Unit</small><Textarea rows={10} value={sourceFactsForm.attributes} onChange={(event) => setSourceFactsForm((value) => ({ ...value, attributes: event.target.value }))} /></Label>{error && <Alert className="border-destructive/40 text-destructive"><AlertDescription>{error}</AlertDescription></Alert>}<DialogFooter><Button type="button" variant="outline" onClick={() => setDialog(null)}>Cancel</Button><Button disabled={busy}>{busy ? "Saving…" : "Save source facts"}</Button></DialogFooter></form></DialogContent></Dialog>
-        <Dialog open={dialog === "generate"} onOpenChange={(open) => !open && !busy && setDialog(null)}><DialogContent className="max-h-[calc(100dvh-2rem)] max-w-2xl overflow-y-auto"><div className="grid gap-5"><DialogHeader><DialogTitle>New {language === "de" ? "German" : "English"} draft</DialogTitle><DialogDescription>Choose the model and grounding source for this generation.</DialogDescription></DialogHeader><Label className="grid gap-2">Model<NativeSelect className="w-full" value={model} onChange={(event) => setModel(event.target.value as (typeof AI_MODELS)[number])}>{AI_MODELS.map((item) => <option key={item} value={item}>{item}</option>)}</NativeSelect></Label><div className="grid gap-3 sm:grid-cols-2" role="radiogroup" aria-label="Grounding mode"><Label className={!useRag ? "flex min-h-11 cursor-pointer items-start gap-3 rounded-md border border-primary bg-primary/5 p-4 ring-1 ring-primary" : "flex min-h-11 cursor-pointer items-start gap-3 rounded-md border p-4"}><input className="mt-1 size-4 accent-primary" type="radio" checked={!useRag} onChange={() => setUseRag(false)} /><span><strong className="block">Facts only</strong><small className="font-normal text-muted-foreground">Use the structured product record.</small></span></Label><Label className={useRag ? "flex min-h-11 cursor-pointer items-start gap-3 rounded-md border border-primary bg-primary/5 p-4 ring-1 ring-primary" : "flex min-h-11 cursor-pointer items-start gap-3 rounded-md border p-4"}><input className="mt-1 size-4 accent-primary" type="radio" checked={useRag} onChange={() => setUseRag(true)} /><span><strong className="block">Facts + knowledge</strong><small className="font-normal text-muted-foreground">Include retrieved product documents.</small></span></Label></div>{useRag && <Label className="grid gap-2">Top-K chunks<Input type="number" min={1} max={20} value={topK} onChange={(event) => setTopK(Math.min(20, Math.max(1, Number(event.target.value) || 1)))} /></Label>}<div className="grid gap-3 rounded-md border p-4"><div className="flex items-center justify-between"><strong>Product knowledge</strong><Badge variant="outline">{knowledgeDocuments.length} documents</Badge></div>{knowledgeDocuments.map((document) => <div className="flex min-h-11 items-center gap-3 rounded-md bg-muted p-2" key={document.id}><span className="min-w-0 flex-1 truncate text-sm">{document.fileName}</span><Button type="button" size="icon" variant="ghost" aria-label={`Remove ${document.fileName}`} onClick={() => deleteKnowledge(document)}><Trash2 /></Button></div>)}<Label className="grid gap-2">Upload instructions<Input type="file" accept=".txt,.md,.pdf" onChange={(event) => setKnowledgeFile(event.target.files?.[0] ?? null)} /></Label><Button type="button" variant="outline" disabled={busy || !knowledgeFile} onClick={uploadKnowledge}><Upload />Upload and index</Button></div>{error && <Alert className="border-destructive/40 text-destructive"><AlertDescription>{error}</AlertDescription></Alert>}<DialogFooter><Button type="button" variant="outline" onClick={() => setDialog(null)}>Cancel</Button><Button type="button" disabled={busy || (useRag && knowledgeDocuments.length === 0)} onClick={generate}><Sparkles />Generate draft</Button></DialogFooter></div></DialogContent></Dialog>
+        <Dialog open={dialog === "generate"} onOpenChange={(open) => !open && !busy && setDialog(null)}><DialogContent className="max-h-[calc(100dvh-2rem)] max-w-2xl overflow-y-auto"><div className="grid gap-5"><DialogHeader><DialogTitle>New {language === "de" ? "German" : "English"} draft</DialogTitle><DialogDescription>Choose the model and grounding source for this generation.</DialogDescription></DialogHeader><Label className="grid gap-2">Model<NativeSelect className="w-full" value={model} onChange={(event) => setModel(event.target.value as (typeof AI_MODELS)[number])}>{AI_MODELS.map((item) => <option key={item} value={item}>{item}</option>)}</NativeSelect></Label><GenerationSettings includeFacts={includeFacts} onIncludeFactsChange={setIncludeFacts} retrievalMode={retrievalMode} onRetrievalModeChange={setRetrievalMode} topK={topK} onTopKChange={setTopK} hasKnowledge={hasReadyKnowledge} disabled={busy} /><div className="grid gap-3 rounded-md border p-4"><div className="flex items-center justify-between"><strong>Product knowledge</strong><Badge variant="outline">{knowledgeDocuments.length} documents</Badge></div>{knowledgeDocuments.map((document) => <div className="flex min-h-11 items-center gap-3 rounded-md bg-muted p-2" key={document.id}><span className="min-w-0 flex-1 truncate text-sm">{document.fileName}<small className="ml-2 text-muted-foreground">{document.status === 1 || String(document.status).toLowerCase() === "completed" ? "Ready" : document.status === 2 || String(document.status).toLowerCase() === "failed" ? "Failed" : "Indexing"}</small></span><Button type="button" size="icon" variant="ghost" aria-label={`Remove ${document.fileName}`} onClick={() => deleteKnowledge(document)}><Trash2 /></Button></div>)}<Label className="grid gap-2">Upload instructions<Input type="file" accept=".txt,.md,.pdf" onChange={(event) => setKnowledgeFile(event.target.files?.[0] ?? null)} /></Label><Button type="button" variant="outline" disabled={busy || !knowledgeFile} onClick={uploadKnowledge}><Upload />Upload and index</Button></div>{error && <Alert className="border-destructive/40 text-destructive"><AlertDescription>{error}</AlertDescription></Alert>}<DialogFooter><Button type="button" variant="outline" onClick={() => setDialog(null)}>Cancel</Button><Button type="button" disabled={busy || (useRag && !hasReadyKnowledge)} onClick={generate}><Sparkles />Generate draft</Button></DialogFooter></div></DialogContent></Dialog>
       </div>
     </AppShell>;
 
@@ -1458,25 +1466,7 @@ function App() {
                     Choose whether Ollama uses only verified product facts or also retrieves product-scoped knowledge.
                   </DialogDescription>
                 </DialogHeader>
-                <div className="grid gap-3 sm:grid-cols-2" role="radiogroup" aria-label="Grounding mode">
-                  <Label className={!useRag ? "flex cursor-pointer items-start gap-3 rounded-md border border-primary bg-primary/5 p-4 ring-1 ring-primary" : "flex cursor-pointer items-start gap-3 rounded-md border bg-background p-4"}>
-                    <input className="mt-0.5 size-4 accent-primary" type="radio" name="grounding" checked={!useRag} onChange={() => setUseRag(false)} />
-                    <span className="grid gap-1"><strong>Facts only</strong><small className="font-normal text-muted-foreground">Use the structured product record. Fast and predictable.</small></span>
-                  </Label>
-                  <Label className={useRag ? "flex cursor-pointer items-start gap-3 rounded-md border border-primary bg-primary/5 p-4 ring-1 ring-primary" : "flex cursor-pointer items-start gap-3 rounded-md border bg-background p-4"}>
-                    <input className="mt-0.5 size-4 accent-primary" type="radio" name="grounding" checked={useRag} onChange={() => setUseRag(true)} />
-                    <span className="grid gap-1"><strong>Facts + knowledge (RAG)</strong><small className="font-normal text-muted-foreground">Retrieve relevant excerpts from this product’s uploaded documents.</small></span>
-                  </Label>
-                </div>
-                {useRag && (
-                  <Label className="grid gap-2 rounded-md border bg-muted/50 p-3">
-                    <span className="flex items-center justify-between gap-3"><strong>Top-K chunks</strong><small className="font-normal text-muted-foreground">1–20 · default 5</small></span>
-                    <Input type="number" min={1} max={20} step={1} value={topK} onChange={(event) => setTopK(Math.min(20, Math.max(1, Number(event.target.value) || 1)))} />
-                    <small className="font-normal text-muted-foreground">
-                      Top-{topK} means Qdrant will add at most the {topK} most relevant {topK === 1 ? "chunk" : "chunks"} to the model prompt. If fewer matches exist, it returns fewer. Higher values increase context, tokens, and latency and may improve coverage, but too many chunks can add noise. Lower values are faster but may miss useful passages.
-                    </small>
-                  </Label>
-                )}
+                <GenerationSettings includeFacts={includeFacts} onIncludeFactsChange={setIncludeFacts} retrievalMode={retrievalMode} onRetrievalModeChange={setRetrievalMode} topK={topK} onTopKChange={setTopK} hasKnowledge={hasReadyKnowledge} disabled={busy} />
                 <div className="grid gap-3 rounded-md border bg-card p-4 shadow-sm">
                   <div className="flex items-center justify-between gap-3">
                     <div className="grid gap-1"><strong>Product knowledge</strong><small className="font-normal text-muted-foreground">{knowledgeDocuments.length} uploaded document{knowledgeDocuments.length === 1 ? "" : "s"}</small></div>
@@ -1503,7 +1493,7 @@ function App() {
                 </div>
                 <DialogFooter>
                   <Button type="button" variant="outline" onClick={() => setDialog(null)} disabled={busy}>Cancel</Button>
-                  <Button type="button" disabled={busy || (useRag && knowledgeDocuments.length === 0)} onClick={generate}><Sparkles aria-hidden="true" />{busy ? "Generating…" : useRag ? "Generate with RAG" : "Generate from facts"}</Button>
+                  <Button type="button" disabled={busy || (useRag && !hasReadyKnowledge)} onClick={generate}><Sparkles aria-hidden="true" />{busy ? "Generating…" : useRag ? "Generate with RAG" : "Generate from facts"}</Button>
                 </DialogFooter>
               </div>
             ) : null}
@@ -1563,7 +1553,7 @@ function Login({ onLogin }: { onLogin: (user: CurrentUser) => void }) {
           <Label className="form-field">
             <span>Email</span>
             <Input
-              type="email"
+              type="email" autoComplete="username"
               required
               value={email}
               onChange={(e) => setEmail(e.target.value)}
@@ -1572,7 +1562,7 @@ function Login({ onLogin }: { onLogin: (user: CurrentUser) => void }) {
           <Label className="form-field">
             <span>Password</span>
             <Input
-              type="password"
+              type="password" autoComplete="current-password"
               required
               value={password}
               onChange={(e) => setPassword(e.target.value)}

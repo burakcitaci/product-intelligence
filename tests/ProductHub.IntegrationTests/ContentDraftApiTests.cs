@@ -6,8 +6,10 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using ProductHub.Application.Content;
+using ProductHub.Application.Knowledge;
 using ProductHub.Application.Products;
 using ProductHub.Domain.Content;
+using ProductHub.Domain.Knowledge;
 using ProductHub.Infrastructure.Persistence;
 
 namespace ProductHub.IntegrationTests;
@@ -164,7 +166,10 @@ public sealed class ContentDraftApiTests(SqlServerFixture database)
         Assert.Equal(HttpStatusCode.Conflict, editAfterApproval.StatusCode);
 
         var rejectedAfterApproval = await client.PostAsync($"/api/drafts/{draft.Id}/reject", null);
-        Assert.Equal(HttpStatusCode.Conflict, rejectedAfterApproval.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, rejectedAfterApproval.StatusCode);
+        var rejected = await rejectedAfterApproval.Content.ReadFromJsonAsync<ContentDraftDto>();
+        Assert.Equal(ContentDraftStatus.Rejected, rejected!.Status);
+        Assert.False(rejected.IsCurrent);
 
         var metadata = await client.GetFromJsonAsync<AiGenerationMetadataDto>(
             $"/api/drafts/{draft.Id}/generation"
@@ -173,7 +178,112 @@ public sealed class ContentDraftApiTests(SqlServerFixture database)
         Assert.Equal(draft.GenerationId, metadata.Id);
     }
 
-    private WebApplicationFactory<Program> CreateFactory(IContentGenerator generator) =>
+    [Theory]
+    [InlineData(true, "None")]
+    [InlineData(false, "None")]
+    [InlineData(true, "Naive")]
+    [InlineData(false, "Naive")]
+    [InlineData(true, "Advanced")]
+    [InlineData(false, "Advanced")]
+    public async Task Generate_SelectedGroundingOptionsRoundTripThroughDatabase(
+        bool includeFacts,
+        string mode
+    )
+    {
+        var generator = new FakeContentGenerator();
+        var vectors = new FakeVectors();
+        await using var factory = CreateFactory(generator, vectors);
+        using var client = factory.CreateClient();
+        var response = await client.PostAsJsonAsync(
+            "/api/products",
+            new
+            {
+                sku = $"RAG-{Guid.NewGuid():N}",
+                name = "Bottle",
+                brand = "Acme",
+                attributes = new[]
+                {
+                    new
+                    {
+                        name = "Capacity",
+                        value = "750",
+                        unit = "ml",
+                    },
+                },
+            }
+        );
+        var product = (await response.Content.ReadFromJsonAsync<ProductDto>())!;
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ProductHubDbContext>();
+            Assert.False(db.Database.HasPendingModelChanges());
+            var document = KnowledgeDocument.Start(
+                product.Id,
+                "manual.md",
+                "text/plain",
+                Guid.NewGuid().ToString("N")
+            );
+            document.Complete(["Clean the bottle with warm water."]);
+            db.KnowledgeDocuments.Add(document);
+            await db.SaveChangesAsync();
+            vectors.Hits = [new(document.Chunks.Single().Id, .9f)];
+        }
+
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"/api/products/{product.Id}/drafts/generate"
+        )
+        {
+            Content = JsonContent.Create(
+                new
+                {
+                    language = "en",
+                    includeFacts,
+                    retrievalMode = mode,
+                    topK = 3,
+                }
+            ),
+        };
+        request.Headers.Add("Idempotency-Key", Guid.NewGuid().ToString());
+        var generated = await client.SendAsync(request);
+        Assert.Equal(HttpStatusCode.Created, generated.StatusCode);
+        Assert.NotNull(generated.Headers.Location);
+        var draft = (await generated.Content.ReadFromJsonAsync<ContentDraftDto>())!;
+        var metadata = (
+            await client.GetFromJsonAsync<AiGenerationMetadataDto>(
+                $"/api/drafts/{draft.Id}/generation"
+            )
+        )!;
+        Assert.Equal(includeFacts, metadata.IncludeFacts);
+        Assert.Equal(mode, metadata.RetrievalMode);
+        Assert.Equal(mode == "None" ? "NotRequested" : "Succeeded", metadata.RetrievalStatus);
+        Assert.Equal(mode == "None" ? null : (int?)3, metadata.RequestedTopK);
+        Assert.Equal(includeFacts ? 1 : 0, generator.LastContext!.Attributes.Count);
+        Assert.Equal(mode == "None" ? 0 : 1, generator.LastContext.Grounding.Count);
+    }
+
+    [Fact]
+    public async Task Generate_InvalidRetrievalModeReturnsValidationProblem()
+    {
+        await using var factory = CreateFactory(new FakeContentGenerator());
+        using var client = factory.CreateClient();
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"/api/products/{Guid.NewGuid()}/drafts/generate"
+        )
+        {
+            Content = JsonContent.Create(new { retrievalMode = "Unknown" }),
+        };
+        request.Headers.Add("Idempotency-Key", Guid.NewGuid().ToString());
+        var response = await client.SendAsync(request);
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Contains("retrievalMode", await response.Content.ReadAsStringAsync());
+    }
+
+    private WebApplicationFactory<Program> CreateFactory(
+        IContentGenerator generator,
+        FakeVectors? vectors = null
+    ) =>
         new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
             builder
                 .UseEnvironment("Testing")
@@ -186,12 +296,46 @@ public sealed class ContentDraftApiTests(SqlServerFixture database)
                     );
                     services.RemoveAll<IContentGenerator>();
                     services.AddSingleton(generator);
+                    services.RemoveAll<ITextEmbeddingGenerator>();
+                    services.AddSingleton<ITextEmbeddingGenerator, FakeEmbeddings>();
+                    services.RemoveAll<IVectorStore>();
+                    services.AddSingleton<IVectorStore>(vectors ?? new FakeVectors());
                 })
         );
+
+    private sealed class FakeEmbeddings : ITextEmbeddingGenerator
+    {
+        public Task<IReadOnlyList<ReadOnlyMemory<float>>> GenerateAsync(
+            IReadOnlyList<string> texts,
+            CancellationToken ct
+        ) =>
+            Task.FromResult<IReadOnlyList<ReadOnlyMemory<float>>>(
+                texts.Select(_ => new ReadOnlyMemory<float>(new float[] { 1 })).ToArray()
+            );
+    }
+
+    private sealed class FakeVectors : IVectorStore
+    {
+        public IReadOnlyList<VectorSearchHit> Hits { get; set; } = [];
+
+        public Task<IReadOnlyList<VectorSearchHit>> SearchAsync(
+            ReadOnlyMemory<float> vector,
+            int limit,
+            Guid? productId,
+            CancellationToken ct
+        ) => Task.FromResult(Hits);
+
+        public Task UpsertAsync(IReadOnlyList<VectorDocument> documents, CancellationToken ct) =>
+            Task.CompletedTask;
+
+        public Task DeleteDocumentAsync(Guid documentId, CancellationToken ct) =>
+            Task.CompletedTask;
+    }
 
     private sealed class FakeContentGenerator : IContentGenerator
     {
         public int CallCount { get; private set; }
+        public ProductContentContext? LastContext { get; private set; }
 
         public Task<GeneratedProductContent> GenerateAsync(
             ProductContentContext context,
@@ -200,6 +344,7 @@ public sealed class ContentDraftApiTests(SqlServerFixture database)
         )
         {
             CallCount++;
+            LastContext = context;
             return Task.FromResult(
                 new GeneratedProductContent(
                     "Faktischer Titel",

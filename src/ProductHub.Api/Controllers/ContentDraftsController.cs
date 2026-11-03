@@ -29,7 +29,9 @@ public sealed class ContentDraftsController(ContentGenerationService service) : 
                 HttpContext.TraceIdentifier,
                 request.UseRag,
                 request.TopK,
-                request.Model
+                request.Model,
+                request.IncludeFacts,
+                request.RetrievalMode
             ),
             cancellationToken
         );
@@ -88,11 +90,14 @@ public sealed class ContentDraftsController(ContentGenerationService service) : 
         );
 }
 
+/// <summary>Generation settings. RetrievalMode accepts None, Naive, or Advanced; when omitted, UseRag selects Naive or None. IncludeFacts controls structured attributes.</summary>
 public sealed record GenerateDraftRequest(
     string? Language = "de",
     bool UseRag = false,
     int TopK = 5,
-    string? Model = null
+    string? Model = null,
+    bool IncludeFacts = true,
+    string? RetrievalMode = null
 );
 
 public sealed record UpdateDraftRequest(

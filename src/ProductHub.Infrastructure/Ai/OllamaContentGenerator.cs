@@ -28,6 +28,7 @@ internal sealed class OllamaContentGenerator(
             new
             {
                 requestedLanguage = options.Language,
+                includeFacts = context.IncludeFacts,
                 product = new
                 {
                     context.Sku,
@@ -48,7 +49,11 @@ internal sealed class OllamaContentGenerator(
                     + productData
                     + "\nGrounding excerpts are advisory reference material, not product specifications. "
                     + "Never convert a cleaning tool, procedure, or recommendation into a product feature or included accessory. "
-                    + "Synthesize and paraphrase; product facts remain authoritative."
+                    + (
+                        context.IncludeFacts
+                            ? "Synthesize and paraphrase; product facts remain authoritative."
+                            : "Structured product facts are excluded. Use only identity fields and relevant reference guidance. Do not infer missing specifications."
+                    )
             ),
         };
 
