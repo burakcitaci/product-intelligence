@@ -12,9 +12,11 @@ The domain rejects blank core fields and duplicate attribute names. Database con
 
 `AiGenerations` records provider, model, prompt version, language, timings, token counts, status, error code, correlation id, and the caller's idempotency key. `(ProductId, IdempotencyKey)` is unique. Token counts remain nullable because not every provider/model response supplies usage.
 
-Grounding is audited by `GroundingMode` (FactsOnly, IdentityOnly, Rag, AdvancedRag), `IncludeFacts`, requested Top-K, retrieval status/duration, chunk/document counts, source citations/scores, and retrieval error code. The API exposes independent `retrievalMode` as None, Naive, or Advanced. Historical Rag runs map to Naive.
+Grounding is audited by `GroundingMode` (FactsOnly, IdentityOnly, Rag, AdvancedRag, GraphRag), `IncludeFacts`, requested Top-K, retrieval status/duration, chunk/document counts, source citations/scores, and retrieval error code. The API exposes independent `retrievalMode` as None, Naive, Advanced, or Graph. Historical Rag runs map to Naive.
 
 Migration `20261103120000_AddGenerationFactsSelection` adds the boolean facts flag with a true backfill. New requests can persist false without changing authoritative product attributes. Advanced retrieval reuses existing chunks and vector points, without reindexing. See [Generation and RAG](generation-and-rag.md).
+
+Graph retrieval uses a bounded request-local projection of existing completed chunks; no graph tables are added. Graph sources persist optional `GraphHops` and `GraphPath` in the existing source-audit JSON. Historical source records retain null graph fields. No additional migration or reindexing is needed for Graph mode.
 
 ## Content drafts
 

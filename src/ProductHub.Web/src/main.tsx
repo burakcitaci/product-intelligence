@@ -108,7 +108,7 @@ type Generation = {
   retrievalDurationMs?: number;
   retrievedChunkCount: number;
   retrievedDocumentCount: number;
-  retrievalSources: { documentId: string; fileName: string; citation: string; score: number }[];
+  retrievalSources: { documentId: string; fileName: string; citation: string; score: number; graphHops?: number | null; graphPath?: string[] | null }[];
   retrievalErrorCode?: string;
 };
 type KnowledgeDocument = {
@@ -731,12 +731,12 @@ function App() {
       tokens: (run?.inputTokens ?? 0) + (run?.outputTokens ?? 0),
       runStatus: run?.status ?? "Loading",
       trace: run?.correlationId ?? "",
-      grounding: !run ? "—" : (run.retrievalMode === "Advanced" || run.groundingMode === "AdvancedRag") ? "Advanced RAG" : (run.retrievalMode === "Naive" || run.groundingMode === "Rag") ? "Naive RAG" : "No RAG",
+      grounding: !run ? "—" : (run.retrievalMode === "Graph" || run.groundingMode === "GraphRag") ? "Graph RAG" : (run.retrievalMode === "Advanced" || run.groundingMode === "AdvancedRag") ? "Advanced RAG" : (run.retrievalMode === "Naive" || run.groundingMode === "Rag") ? "Naive RAG" : "No RAG",
       facts: !run ? "—" : run.includeFacts === false ? "Excluded" : "Included",
-      topK: (run?.groundingMode === "Rag" || run?.groundingMode === "AdvancedRag")
+      topK: (run?.groundingMode === "Rag" || run?.groundingMode === "AdvancedRag" || run?.groundingMode === "GraphRag")
         ? `${run.requestedTopK ?? "—"} requested → ${run.retrievedChunkCount} returned`
         : "—",
-      evidence: (run?.groundingMode === "Rag" || run?.groundingMode === "AdvancedRag")
+      evidence: (run?.groundingMode === "Rag" || run?.groundingMode === "AdvancedRag" || run?.groundingMode === "GraphRag")
         ? run.retrievalStatus === "Succeeded"
           ? `${run.retrievedChunkCount} chunks · ${run.retrievedDocumentCount} docs`
               + (run.retrievalSources?.length
@@ -757,7 +757,7 @@ function App() {
     { accessorKey: "topK", header: "Top-K", meta: { label: "Top-K" } },
     { accessorKey: "evidence", header: "Evidence", meta: { label: "Evidence" }, cell: ({ row }) => {
       const run = row.original.run;
-      return <span title={run?.retrievalSources?.map((x) => `${x.citation} (${x.score.toFixed(3)})`).join("\n")}>{row.original.evidence}</span>;
+      return <div><span title={run?.retrievalSources?.map((x) => `${x.citation} (${x.score.toFixed(3)})`).join("\n")}>{row.original.evidence}</span>{run?.retrievalSources?.some((source) => source.graphHops != null) && <details className="mt-1 max-w-xs whitespace-normal"><summary className="cursor-pointer text-xs text-primary">Graph paths</summary><ul className="mt-2 grid gap-2">{run.retrievalSources.map((source, index) => <li className="rounded-md border bg-muted/30 p-2 text-xs" key={`${source.documentId}-${index}`}><strong>{source.citation} · {source.graphHops ?? 0} hops</strong><p className="mt-1 break-words text-muted-foreground">{source.graphPath?.join(" → ")}</p></li>)}</ul></details>}</div>;
     } },
     { accessorKey: "latencyMs", header: "Latency", meta: { label: "Latency" }, cell: ({ row }) => row.original.latencyMs ? `${(row.original.latencyMs / 1000).toFixed(1)}s` : "—" },
     { accessorKey: "tokens", header: "Tokens", meta: { label: "Tokens" }, cell: ({ row }) => row.original.tokens || "—" },

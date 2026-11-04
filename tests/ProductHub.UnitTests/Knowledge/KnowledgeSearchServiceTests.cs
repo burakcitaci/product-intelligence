@@ -74,6 +74,7 @@ public sealed class KnowledgeSearchServiceTests
     [Theory]
     [InlineData(RetrievalMode.Naive)]
     [InlineData(RetrievalMode.Advanced)]
+    [InlineData(RetrievalMode.Graph)]
     public async Task Search_DiscardsStaleAndOtherProductsHits(RetrievalMode mode)
     {
         var store = new TestKnowledgeStore();
@@ -245,6 +246,9 @@ internal sealed class TestVectors : IVectorStore
 internal sealed class TestKnowledgeStore : IKnowledgeDocumentStore
 {
     private readonly List<KnowledgeDocument> documents = [];
+    public bool ReturnUnscopedGraph { get; init; }
+    public Action? BeforeGraphRead { get; set; }
+    public int LastGraphLimit { get; private set; }
 
     public KnowledgeDocument Add(Guid productId, string name, params string[] chunks)
     {
@@ -275,6 +279,31 @@ internal sealed class TestKnowledgeStore : IKnowledgeDocumentStore
                 .SelectMany(x => x.Chunks)
                 .Where(x => wanted.Contains(x.Id))
                 .ToDictionary(x => x.Id)
+        );
+    }
+
+    public Task<IReadOnlyList<DocumentChunk>> GetGraphChunksAsync(
+        Guid productId,
+        IReadOnlyCollection<Guid> seedChunkIds,
+        int limit,
+        CancellationToken ct
+    )
+    {
+        BeforeGraphRead?.Invoke();
+        ct.ThrowIfCancellationRequested();
+        LastGraphLimit = limit;
+        return Task.FromResult<IReadOnlyList<DocumentChunk>>(
+            documents
+                .Where(x =>
+                    ReturnUnscopedGraph
+                    || (x.ProductId == productId && x.Status == DocumentIngestionStatus.Completed)
+                )
+                .SelectMany(x => x.Chunks)
+                .OrderByDescending(x => seedChunkIds.Contains(x.Id))
+                .ThenBy(x => x.DocumentId)
+                .ThenBy(x => x.Ordinal)
+                .Take(limit)
+                .ToArray()
         );
     }
 

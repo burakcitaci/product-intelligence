@@ -64,7 +64,9 @@ public sealed record RetrievalSourceDto(
     Guid DocumentId,
     string FileName,
     string Citation,
-    float Score
+    float Score,
+    int? GraphHops = null,
+    IReadOnlyList<string>? GraphPath = null
 );
 
 public sealed class NotFoundException(string message) : Exception(message);

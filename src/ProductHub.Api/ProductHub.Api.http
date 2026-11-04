@@ -72,3 +72,15 @@ Idempotency-Key: invalid-rag-1
 {
   "retrievalMode": "Unknown"
 }
+
+### Graph RAG: product-scoped graph traversal, facts optional (requires indexed knowledge)
+POST {{ProductHub.Api_HostAddress}}/api/products/00000000-0000-0000-0000-000000000000/drafts/generate
+Content-Type: application/json
+Idempotency-Key: graph-no-facts-1
+
+{
+  "language": "en",
+  "includeFacts": false,
+  "retrievalMode": "Graph",
+  "topK": 5
+}

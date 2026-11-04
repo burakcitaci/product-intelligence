@@ -31,18 +31,29 @@ public sealed class KnowledgeSearchService(
             throw new ValidationException(
                 new Dictionary<string, string[]> { ["limit"] = ["Limit must be between 1 and 20."] }
             );
-        if (query.Mode is not (RetrievalMode.Naive or RetrievalMode.Advanced))
+        if (
+            query.Mode is not (RetrievalMode.Naive or RetrievalMode.Advanced or RetrievalMode.Graph)
+        )
             throw new ValidationException(
                 new Dictionary<string, string[]>
                 {
-                    ["mode"] = ["Knowledge search requires Naive or Advanced retrieval."],
+                    ["mode"] = ["Knowledge search requires Naive, Advanced, or Graph retrieval."],
                 }
             );
 
-        var queries =
-            query.Mode == RetrievalMode.Advanced
-                ? ExpandQueries(query.Query.Trim())
-                : new[] { query.Query.Trim() };
+        if (
+            query.Mode == RetrievalMode.Graph
+            && (query.ProductId is null || query.ProductId == Guid.Empty)
+        )
+            throw new ValidationException(
+                new Dictionary<string, string[]>
+                {
+                    ["productId"] = ["Graph retrieval requires a product id."],
+                }
+            );
+        var queries = query.Mode is RetrievalMode.Advanced or RetrievalMode.Graph
+            ? ExpandQueries(query.Query.Trim())
+            : new[] { query.Query.Trim() };
         var queryVectors = await embeddings.GenerateAsync(queries, cancellationToken);
         if (queryVectors.Count != queries.Length)
             throw new InvalidOperationException("Embedding count did not match query count.");
@@ -55,7 +66,7 @@ public sealed class KnowledgeSearchService(
             rankings.Add(
                 await vectors.SearchAsync(
                     vector,
-                    query.Mode == RetrievalMode.Advanced
+                    query.Mode is RetrievalMode.Advanced or RetrievalMode.Graph
                         ? Math.Min(query.Limit * 4, MaxCandidatesPerQuery)
                         : query.Limit,
                     query.ProductId,
@@ -82,6 +93,27 @@ public sealed class KnowledgeSearchService(
                 .Select(hit => Map(candidates[hit.Id], hit.Score))
                 .ToArray();
 
+        if (query.Mode == RetrievalMode.Graph)
+        {
+            var seeds = RankAdvanced(
+                query with
+                {
+                    Limit = Math.Max(query.Limit, 8),
+                },
+                rankings,
+                candidates,
+                cancellationToken
+            );
+            if (seeds.Count == 0)
+                return [];
+            var corpus = await store.GetGraphChunksAsync(
+                query.ProductId!.Value,
+                seeds.Select(x => x.ChunkId).ToArray(),
+                500,
+                cancellationToken
+            );
+            return KnowledgeGraphSearch.Retrieve(query, seeds, corpus, cancellationToken);
+        }
         return RankAdvanced(query, rankings, candidates, cancellationToken);
     }
 

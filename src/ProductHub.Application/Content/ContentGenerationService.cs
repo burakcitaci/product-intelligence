@@ -64,6 +64,7 @@ public sealed class ContentGenerationService(
             NormalizeLanguage(command.Language),
             retrievalMode switch
             {
+                RetrievalMode.Graph => GroundingMode.GraphRag,
                 RetrievalMode.Advanced => GroundingMode.AdvancedRag,
                 RetrievalMode.Naive => GroundingMode.Rag,
                 _ => command.IncludeFacts ? GroundingMode.FactsOnly : GroundingMode.IdentityOnly,
@@ -132,7 +133,9 @@ public sealed class ContentGenerationService(
                             x.DocumentId,
                             x.FileName,
                             x.Citation,
-                            x.Score
+                            x.Score,
+                            x.GraphHops,
+                            x.GraphPath
                         ))
                         .ToArray();
                     generation.RecordRetrieval(
@@ -364,6 +367,7 @@ public sealed class ContentGenerationService(
             generation.IncludeFacts,
             generation.GroundingMode switch
             {
+                GroundingMode.GraphRag => "Graph",
                 GroundingMode.AdvancedRag => "Advanced",
                 GroundingMode.Rag => "Naive",
                 _ => "None",
@@ -406,11 +410,11 @@ public sealed class ContentGenerationService(
             errors["language"] = ["Language must be 'de' or 'en'."];
         if (
             command.RetrievalMode is not null
-            && !new[] { "none", "naive", "advanced" }.Contains(
+            && !new[] { "none", "naive", "advanced", "graph" }.Contains(
                 command.RetrievalMode.Trim().ToLowerInvariant()
             )
         )
-            errors["retrievalMode"] = ["Retrieval mode must be None, Naive, or Advanced."];
+            errors["retrievalMode"] = ["Retrieval mode must be None, Naive, Advanced, or Graph."];
         if (ResolveRetrievalMode(command) != RetrievalMode.None && command.TopK is < 1 or > 20)
             errors["topK"] = ["Top-K must be between 1 and 20."];
         var selectedModel = string.IsNullOrWhiteSpace(command.Model)
@@ -425,6 +429,7 @@ public sealed class ContentGenerationService(
     private static RetrievalMode ResolveRetrievalMode(GenerateDraftCommand command) =>
         command.RetrievalMode?.Trim().ToLowerInvariant() switch
         {
+            "graph" => RetrievalMode.Graph,
             "advanced" => RetrievalMode.Advanced,
             "naive" => RetrievalMode.Naive,
             "none" => RetrievalMode.None,

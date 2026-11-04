@@ -26,6 +26,7 @@ public enum RetrievalMode
     None,
     Naive,
     Advanced,
+    Graph,
 }
 
 public sealed record SearchKnowledgeQuery(
@@ -42,7 +43,9 @@ public sealed record KnowledgeSearchResult(
     int ChunkOrdinal,
     string Text,
     float Score,
-    string Citation
+    string Citation,
+    int? GraphHops = null,
+    IReadOnlyList<string>? GraphPath = null
 );
 
 public sealed record ExtractedDocument(string Text);

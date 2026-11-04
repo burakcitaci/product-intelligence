@@ -37,6 +37,29 @@ internal sealed class KnowledgeDocumentStore(ProductHubDbContext db) : IKnowledg
             .ToDictionaryAsync(x => x.Id, ct);
     }
 
+    public async Task<IReadOnlyList<DocumentChunk>> GetGraphChunksAsync(
+        Guid productId,
+        IReadOnlyCollection<Guid> seedChunkIds,
+        int limit,
+        CancellationToken ct
+    )
+    {
+        var seeds = seedChunkIds.ToArray();
+        return await db
+            .DocumentChunks.AsNoTracking()
+            .Include(x => x.Document)
+            .Where(x =>
+                x.Document.ProductId == productId
+                && x.Document.Status == DocumentIngestionStatus.Completed
+            )
+            .OrderByDescending(x => seeds.Contains(x.Id))
+            .ThenByDescending(x => x.Document.CreatedAt)
+            .ThenBy(x => x.DocumentId)
+            .ThenBy(x => x.Ordinal)
+            .Take(Math.Clamp(limit, 1, 500))
+            .ToArrayAsync(ct);
+    }
+
     public Task<bool> ExistsByHashAsync(Guid productId, string hash, CancellationToken ct) =>
         db.KnowledgeDocuments.AnyAsync(x => x.ProductId == productId && x.Sha256 == hash, ct);
 

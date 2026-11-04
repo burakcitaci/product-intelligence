@@ -90,7 +90,7 @@ public sealed class ContentDraftsController(ContentGenerationService service) : 
         );
 }
 
-/// <summary>Generation settings. RetrievalMode accepts None, Naive, or Advanced; when omitted, UseRag selects Naive or None. IncludeFacts controls structured attributes.</summary>
+/// <summary>Generation settings. RetrievalMode accepts None, Naive, Advanced, or Graph; when omitted, UseRag selects Naive or None. IncludeFacts controls structured attributes.</summary>
 public sealed record GenerateDraftRequest(
     string? Language = "de",
     bool UseRag = false,

@@ -23,11 +23,13 @@ A unique `(ProductId, IdempotencyKey)` index serializes repeated requests. A com
 
 The Application layer owns orchestration and provider-neutral contracts. Infrastructure owns PDF extraction and the Ollama/Qdrant HTTP adapters. SQL Server is authoritative; Qdrant is a rebuildable projection.
 
-## Generation sources and advanced RAG
+## Generation sources and retrieval
 
-Generation independently selects structured facts and retrieval mode (None, Naive, Advanced). Name, brand, and SKU always identify the product; excluded attributes are omitted from retrieval queries and generation. Explicit modes take precedence over the legacy `useRag` flag.
+Generation independently selects structured facts and retrieval mode (None, Naive, Advanced, Graph). Name, brand, and SKU always identify the product; excluded attributes are omitted from retrieval queries and generation. Explicit modes take precedence over the legacy `useRag` flag.
 
 Advanced retrieval expands supplied query clauses, retrieves a bounded candidate union, applies BM25 candidate reranking and reciprocal rank fusion, removes near duplicates, and enforces an excerpt budget. SQL validates completed status and product ownership for both paths. Failed or empty retrieval aborts generation.
+
+Graph RAG extends advanced semantic anchors using a request-local chunk/concept graph over up to 500 completed chunks for the selected product. It traverses shared-concept and document-adjacency links for up to two hops, returning linked passages beyond vector candidates. SQL remains authoritative and no separate graph persistence is required. Source JSON records traversal paths, and the model audit exposes them.
 
 The generation audit persists facts inclusion and retrieval mode. Prompt v3 handles optional facts while keeping specifications authoritative and reference guidance advisory. See [Generation and RAG](generation-and-rag.md) for the algorithm, API, and rollout.
 

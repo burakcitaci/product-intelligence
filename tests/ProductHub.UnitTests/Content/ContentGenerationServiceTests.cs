@@ -221,6 +221,8 @@ public sealed class ContentGenerationServiceTests
     [InlineData(false, "Naive", GroundingMode.Rag)]
     [InlineData(true, "Advanced", GroundingMode.AdvancedRag)]
     [InlineData(false, "Advanced", GroundingMode.AdvancedRag)]
+    [InlineData(true, "Graph", GroundingMode.GraphRag)]
+    [InlineData(false, "Graph", GroundingMode.GraphRag)]
     public async Task GenerateAsync_SupportsAllFactsAndRetrievalCombinations(
         bool includeFacts,
         string mode,
@@ -306,6 +308,8 @@ public sealed class ContentGenerationServiceTests
     [Theory]
     [InlineData("Advanced", false)]
     [InlineData("Naive", true)]
+    [InlineData("Graph", false)]
+    [InlineData("Graph", true)]
     public async Task GenerateAsync_RetrievalFailureDoesNotSilentlyFallBack(
         string mode,
         bool unavailable
@@ -344,6 +348,8 @@ public sealed class ContentGenerationServiceTests
     [InlineData("Unknown", 5)]
     [InlineData("Advanced", 0)]
     [InlineData("Naive", 21)]
+    [InlineData("Graph", 0)]
+    [InlineData("Graph", 21)]
     public async Task GenerateAsync_RejectsInvalidRetrievalOptions(string mode, int topK)
     {
         var store = new FakeStore { Product = Product.Create("SKU-1", "Bottle", "Acme") };

@@ -12,6 +12,7 @@ public enum GroundingMode
     FactsOnly,
     Rag,
     AdvancedRag,
+    GraphRag,
     IdentityOnly,
 }
 
@@ -48,7 +49,10 @@ public sealed class AiGeneration
         PromptVersion = Required(promptVersion, nameof(promptVersion), 100);
         Language = Required(language, nameof(language), 10);
         GroundingMode = groundingMode;
-        RequestedTopK = groundingMode is GroundingMode.Rag or GroundingMode.AdvancedRag
+        RequestedTopK = groundingMode
+            is GroundingMode.Rag
+                or GroundingMode.AdvancedRag
+                or GroundingMode.GraphRag
             ? requestedTopK
             : null;
         RetrievalStatus = RetrievalStatus.NotRequested;
@@ -119,7 +123,10 @@ public sealed class AiGeneration
         string sourcesJson
     )
     {
-        if (GroundingMode is not (GroundingMode.Rag or GroundingMode.AdvancedRag))
+        if (
+            GroundingMode
+            is not (GroundingMode.Rag or GroundingMode.AdvancedRag or GroundingMode.GraphRag)
+        )
             throw new InvalidOperationException("Retrieval is only valid for RAG generations.");
         RetrievalStatus = RetrievalStatus.Succeeded;
         RetrievalDurationMs = Math.Max(0, durationMs);

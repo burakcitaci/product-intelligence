@@ -185,6 +185,8 @@ public sealed class ContentDraftApiTests(SqlServerFixture database)
     [InlineData(false, "Naive")]
     [InlineData(true, "Advanced")]
     [InlineData(false, "Advanced")]
+    [InlineData(true, "Graph")]
+    [InlineData(false, "Graph")]
     public async Task Generate_SelectedGroundingOptionsRoundTripThroughDatabase(
         bool includeFacts,
         string mode
@@ -260,6 +262,103 @@ public sealed class ContentDraftApiTests(SqlServerFixture database)
         Assert.Equal(mode == "None" ? null : (int?)3, metadata.RequestedTopK);
         Assert.Equal(includeFacts ? 1 : 0, generator.LastContext!.Attributes.Count);
         Assert.Equal(mode == "None" ? 0 : 1, generator.LastContext.Grounding.Count);
+        if (mode == "Graph")
+        {
+            var source = Assert.Single(metadata.RetrievalSources);
+            Assert.Equal(0, source.GraphHops);
+            Assert.Equal(new[] { "manual.md#chunk-0" }, source.GraphPath);
+        }
+    }
+
+    [Fact]
+    public async Task Generate_GraphRagPersistsTwoHopSourcesMissingFromVectorResults()
+    {
+        var generator = new FakeContentGenerator();
+        var vectors = new FakeVectors();
+        await using var factory = CreateFactory(generator, vectors);
+        using var client = factory.CreateClient();
+        var response = await client.PostAsJsonAsync(
+            "/api/products",
+            new
+            {
+                sku = $"GRAPH-{Guid.NewGuid():N}",
+                name = "Kettle",
+                brand = "Acme",
+                attributes = Array.Empty<object>(),
+            }
+        );
+        var product = (await response.Content.ReadFromJsonAsync<ProductDto>())!;
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ProductHubDbContext>();
+            var root = KnowledgeDocument.Start(
+                product.Id,
+                "control.md",
+                "text/plain",
+                Guid.NewGuid().ToString("N")
+            );
+            root.Complete(["Thermostat controls kettle temperature."]);
+            var bridge = KnowledgeDocument.Start(
+                product.Id,
+                "care.md",
+                "text/plain",
+                Guid.NewGuid().ToString("N")
+            );
+            bridge.Complete(["Thermostat needs regular descaling."]);
+            var leaf = KnowledgeDocument.Start(
+                product.Id,
+                "cleaning.md",
+                "text/plain",
+                Guid.NewGuid().ToString("N")
+            );
+            leaf.Complete(["Descaling removes mineral residue."]);
+            db.KnowledgeDocuments.AddRange(root, bridge, leaf);
+            await db.SaveChangesAsync();
+            vectors.Hits = [new(root.Chunks.Single().Id, .9f)];
+        }
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"/api/products/{product.Id}/drafts/generate"
+        )
+        {
+            Content = JsonContent.Create(
+                new
+                {
+                    language = "en",
+                    includeFacts = false,
+                    retrievalMode = "Graph",
+                    topK = 3,
+                }
+            ),
+        };
+        request.Headers.Add("Idempotency-Key", Guid.NewGuid().ToString());
+        var generated = await client.SendAsync(request);
+        Assert.Equal(HttpStatusCode.Created, generated.StatusCode);
+        var draft = (await generated.Content.ReadFromJsonAsync<ContentDraftDto>())!;
+        var metadata = (
+            await client.GetFromJsonAsync<AiGenerationMetadataDto>(
+                $"/api/drafts/{draft.Id}/generation"
+            )
+        )!;
+        Assert.Equal("GraphRag", metadata.GroundingMode);
+        Assert.Equal("Graph", metadata.RetrievalMode);
+        Assert.False(metadata.IncludeFacts);
+        Assert.Equal(3, metadata.RetrievedDocumentCount);
+        var source = Assert.Single(metadata.RetrievalSources, x => x.FileName == "cleaning.md");
+        Assert.Equal(2, source.GraphHops);
+        Assert.Equal(
+            new[]
+            {
+                "control.md#chunk-0",
+                "shared-concept:thermostat",
+                "care.md#chunk-0",
+                "shared-concept:descaling",
+                "cleaning.md#chunk-0",
+            },
+            source.GraphPath
+        );
+        Assert.Empty(generator.LastContext!.Attributes);
+        Assert.Contains(generator.LastContext.Grounding, x => x.Citation == "cleaning.md#chunk-0");
     }
 
     [Fact]

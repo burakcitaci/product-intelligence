@@ -15,6 +15,12 @@ public interface IKnowledgeDocumentStore
         IEnumerable<Guid> ids,
         CancellationToken cancellationToken
     );
+    Task<IReadOnlyList<DocumentChunk>> GetGraphChunksAsync(
+        Guid productId,
+        IReadOnlyCollection<Guid> seedChunkIds,
+        int limit,
+        CancellationToken cancellationToken
+    );
     Task<bool> ExistsByHashAsync(
         Guid productId,
         string sha256,

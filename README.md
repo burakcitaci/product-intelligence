@@ -107,7 +107,7 @@ Add `--volumes` only when you intentionally want to remove local SQL Server and 
 1. Sign in as an administrator.
 2. Create or select a catalog.
 3. Add products and factual attributes.
-4. Choose whether to include product facts, select No RAG, Naive RAG, or Advanced RAG, and generate a German or English draft with Ollama.
+4. Choose whether to include product facts, select No RAG, Naive RAG, Advanced RAG, or Graph RAG, and generate a German or English draft with Ollama.
 5. Review or edit the generated content.
 6. Approve or reject one or more drafts.
 7. Mark one approved draft as the current published version.
@@ -124,8 +124,11 @@ The generation dialog independently controls **Include product facts** and **Doc
 | No RAG | Generate from identity and optional structured facts, without documents |
 | Naive RAG | One semantic vector search over the selected product's uploaded knowledge |
 | Advanced RAG | Up to three searches, wider candidate retrieval, BM25 candidate reranking, reciprocal rank fusion, near-duplicate removal, and context budgeting |
+| Graph RAG | Advanced semantic anchors plus up to two hops through shared concepts and adjacent passages in a product-scoped document graph |
 
-Both RAG modes require completed, indexed product documents and accept Top-K from 1 to 20 (default 5). Advanced RAG returns up to Top-K excerpts within a 12,000-character retrieved-context budget. It reuses Ollama embeddings and Qdrant; no extra service or reindexing is needed. Retrieval failure stops generation instead of silently falling back.
+All three RAG modes require completed, indexed product documents and accept Top-K from 1 to 20 (default 5). Advanced RAG returns up to Top-K excerpts within a 12,000-character retrieved-context budget. It reuses Ollama embeddings and Qdrant; no extra service or reindexing is needed. Retrieval failure stops generation instead of silently falling back.
+
+Graph RAG rebuilds a local graph from up to 500 completed chunks per product. It can bring in related text absent from vector results, keeps the same excerpt/context limits, and records paths in the model audit. Select **Graph RAG** in the dialog or send `"retrievalMode": "Graph"` in the generation request. No extra migration, graph database, or reindexing is required for this mode. This is a lexical chunk/concept graph rather than the full Microsoft GraphRAG indexing and community-summary pipeline.
 
 Without facts and without RAG, generation is limited to product identity. Uploaded guidance remains advisory and must not become invented specifications. Review is required before publishing.
 
@@ -149,7 +152,7 @@ This includes migration `20261103120000_AddGenerationFactsSelection` and default
 dotnet ef database update --project src/ProductHub.Infrastructure --startup-project src/ProductHub.Api
 ```
 
-See [Generation and RAG](docs/architecture/generation-and-rag.md) for all six combinations, ranking details, limits, audit fields, and rollout instructions.
+See [Generation and RAG](docs/architecture/generation-and-rag.md) for all eight combinations, ranking details, limits, audit fields, and rollout instructions.
 
 ## telemetry-hub integration
 
@@ -226,5 +229,6 @@ More detail is available in:
 - [Architecture overview](docs/architecture/overview.md)
 - [Data model](docs/architecture/data-model.md)
 - [Generation and RAG](docs/architecture/generation-and-rag.md)
+- [UI and AI implementation roadmap](docs/ui-ai-roadmap.md)
 - [Modular-monolith ADR](docs/adr/0001-modular-monolith.md)
 - [Local Ollama ADR](docs/adr/0002-local-ollama.md)
