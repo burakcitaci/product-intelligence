@@ -22,7 +22,7 @@ Install:
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/)
 - [Node.js](https://nodejs.org/) 22.18 or newer
 - [Ollama](https://ollama.com/download)
-- PowerShell 7 on Windows, or Bash on macOS/Linux
+- Bash (Git Bash or WSL on Windows)
 
 Pull the local AI models:
 
@@ -38,17 +38,9 @@ Clone the repository and create the local environment file:
 ```bash
 git clone <repository-url>
 cd product-intelligence-hub
-cp .env.example .env
 ```
 
-On Windows PowerShell:
-
-```powershell
-Copy-Item .env.example .env
-.\scripts\Start-ProductHub.ps1
-```
-
-On macOS or Linux:
+In Bash (including Git Bash or WSL on Windows):
 
 ```bash
 cp .env.example .env
@@ -81,14 +73,6 @@ Application logs and frontend process information are written to `.run/`.
 These accounts are for local development only.
 
 ## Stop the application
-
-Windows:
-
-```powershell
-.\scripts\Stop-ProductHub.ps1
-```
-
-macOS/Linux:
 
 ```bash
 bash ./scripts/stop-producthub.sh
@@ -156,34 +140,27 @@ See [Generation and RAG](docs/architecture/generation-and-rag.md) for all eight 
 
 ## telemetry-hub integration
 
-Product Hub can send its structured ASP.NET Core logs to telemetry-hub through OpenTelemetry OTLP/HTTP. This makes API activity and Ollama generation information available for centralized log search, dashboards, and operational monitoring. Generation logs include model latency and token counts.
+Product Hub exports structured API logs and distributed traces to [telemetry-hub](https://github.com/burakcitaci/telemetry-hub) using OpenTelemetry OTLP/HTTP. ASP.NET Core requests, outgoing HTTP calls, and SQL Server commands are traced. Generation logs include model latency and token counts. Product Hub does not currently export metrics.
 
-Add a telemetry-hub ingestion endpoint and key to `.env`:
+1. Start telemetry-hub by following its [installation guide](https://github.com/burakcitaci/telemetry-hub#first-installation), and keep its backend port-forward running (`yarn ports:backend`).
+2. Sign in to the telemetry-hub dashboard, open **Administration → Ingestion-Keys**, select a team, and generate a client key. Copy the key when it is displayed; its plaintext is shown only once.
+3. Add the key to Product Hub's ignored local `.env` file:
 
 ```dotenv
-OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:3001/api/ingest
-OTEL_EXPORTER_OTLP_HEADERS=x-api-key=<provisioned-client-key>
-OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
-OTEL_SERVICE_NAME=product-hub-api
+OTEL_EXPORTER_OTLP_HEADERS=x-api-key=<key-generated-in-telemetry-hub>
 ```
 
-When telemetry-hub is running in the expected local Kubernetes environment, the helper can provision a scoped ingestion key and update Product Hub automatically.
+The Compose configuration sends logs to `http://host.docker.internal:3001/api/ingest`, which reaches telemetry-hub's host port-forward from the API container. `localhost` inside the API container refers to that container, not your machine. If running the API directly on your host instead of in Compose, set `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:3001/api/ingest`.
 
-Windows:
+The protocol defaults to OTLP/HTTP protobuf and the service name defaults to `product-hub-api`; set `OTEL_SERVICE_NAME` in `.env` only if you want a different service label.
 
-```powershell
-.\scripts\Configure-TelemetryHub.ps1
-```
-
-macOS/Linux:
+Restart the API so it reads the new key:
 
 ```bash
-bash ./scripts/configure-telemetry-hub.sh
+docker compose up -d --force-recreate api
 ```
 
-The Bash helper requires `kubectl`, `jq`, `openssl`, `base64`, and Python 3. Real ingestion keys are written only to the ignored local `.env` file.
-
-Product Hub currently exports logs. The same OpenTelemetry foundation can later be extended with application metrics and distributed traces for richer telemetry-hub monitors.
+Generate API activity, then select the `product-hub-api` service and `Development` environment in telemetry-hub's **Logs** view. Never commit or share the ingestion key. The local HTTP endpoint is for development; use HTTPS and appropriate secure transport settings for non-local deployments.
 
 ## Build and test
 
@@ -226,33 +203,25 @@ The UI queues generation in SQL Server and reconnects to progress when a product
 
 Advanced and Graph RAG now retrieve independent SQL keyword candidates alongside vector results, including bounded English/German synonyms and exact model tokens. Source audits include document/chunk revisions, candidate counts and graph cache provenance. Named generation presets save common choices in the current browser.
 
-See [Durable generation jobs](docs/architecture/generation-jobs.md) and [generation/retrieval details](docs/architecture/generation-and-rag.md). Current verification includes 32 integration tests, 18 desktop/mobile browser checks, 16 offline evaluator checks and 17 live API checks. The final unit-test binary was restricted by Windows application control. See [measured acceptance results](docs/evaluation-results-2026-11-04.md), including the model numeric error caught by review and the optional reranker decision.
+See [Durable generation jobs](docs/architecture/generation-jobs.md) and [generation/retrieval details](docs/architecture/generation-and-rag.md). Recorded verification includes 32 integration tests, 18 desktop/mobile browser checks, 16 offline evaluator checks and 17 live API checks. The final unit-test binary was restricted by Windows application control. See [measured acceptance results](docs/evaluation-results-2026-11-04.md), including the model numeric error caught by review and the optional reranker decision.
 
 Knowledge sources now support explicit supersession and extraction-version auditing. Apply migration `20261104130000_AddDocumentRevisions` along with the earlier pending migrations. Old evidence stays available for review while retrieval uses active sources. Failed vector writes persist Failed status rather than advertising ready documents.
 
 Run browser acceptance checks with `npm run test:browser` from the web project (installed Edge on Windows; `npx playwright install --with-deps chromium` on Linux). CI runs the production-build desktop/mobile suite. Workspace links restore the selected product after reload, and lost generation submissions retain an idempotency key for safe retries.
 
-## AI evaluation
+## Archived AI evaluation results
 
-A bounded local runner covers 48 German/English cases and all four retrieval modes with facts included or excluded. Python 3.10+ is needed only for this optional tool.
-
-```bash
-python scripts/evaluate.py --dry-run
-python -m unittest discover -s tests/evaluation -p test_evaluate.py -v
-```
-
-Live runs require the local application and administrator credentials in environment variables. They default to four generations and save checkpointed JSON reports; no draft is approved or published. See [Evaluation guide](docs/evaluation.md) for smoke runs, filters, limits, metrics, and verification caveats.
+The optional evaluation tools have been removed to keep clone and runtime requirements small. Historical observations and their limitations are documented in [acceptance results](docs/evaluation-results-2026-11-04.md).
 
 ## Scripts
 
-| PowerShell | Bash | Purpose |
-| --- | --- | --- |
-| `Start-ProductHub.ps1` | `start-producthub.sh` | Start the local application |
-| `Stop-ProductHub.ps1` | `stop-producthub.sh` | Stop API and frontend processes |
-| `Configure-TelemetryHub.ps1` | `configure-telemetry-hub.sh` | Configure telemetry-hub log ingestion |
-| `Invoke-OllamaSmokeTest.ps1` | `invoke-ollama-smoke-test.sh` | Generate a draft through the API |
+| Script | Purpose |
+| --- | --- |
+| `start-producthub.sh` | Start the local application |
+| `stop-producthub.sh` | Stop API and frontend processes |
+| `invoke-ollama-smoke-test.sh` | Generate a draft through the API |
 
-All scripts are in the `scripts/` directory.
+All scripts are in `scripts/`. Run them from Bash.
 
 ## Architecture
 
@@ -264,6 +233,6 @@ More detail is available in:
 - [Data model](docs/architecture/data-model.md)
 - [Generation and RAG](docs/architecture/generation-and-rag.md)
 - [UI and AI implementation roadmap](docs/ui-ai-roadmap.md)
-- [Evaluation guide](docs/evaluation.md)
+- [Acceptance results](docs/evaluation-results-2026-11-04.md)
 - [Modular-monolith ADR](docs/adr/0001-modular-monolith.md)
 - [Local Ollama ADR](docs/adr/0002-local-ollama.md)

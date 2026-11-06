@@ -6,7 +6,7 @@ All eight recommendation areas have implementations. This report separates shipp
 
 | Area | Implemented behavior |
 | --- | --- |
-| Evaluation | 48 German/English cases, bounded mode/facts/model matrix, checkpoints, source recall, claim-risk gates, offline rescoring |
+| Historical evaluation | 48 German/English cases, bounded mode/facts/model matrix, checkpoints, source recall, claim-risk gates, offline rescoring |
 | Structured generation | Explicit JSON schema, strict parsing, shared validation, bounded transport retries, persisted sampling parameters |
 | Evidence and abstention | Saved claim/source snapshots, conservative classifications, sparse output, original-evidence editing, authenticated acknowledgement |
 | Version review | Read-only saved-version diffs, settings/version labels, numeric edits, unsaved-change guards |
@@ -50,13 +50,13 @@ Every response satisfied the output contract. All three RAG runs retrieved the e
 
 An earlier cold attempt reached its client timeout, and a Windows file-sharing lock interrupted a checkpoint. Both remain recorded separately. Checkpoint file replacement now has bounded retries that never repeat a model/API request. The warmed smoke is not presented as proof that cold starts meet the default timeout.
 
-The compact tracked observations are in [generation smoke data](../tests/evaluation/results/2026-11-04-smoke.json). Full local reports remain under .artifacts/evaluation.
+The compact tracked observations are in [generation smoke data](../tests/evaluation/results/2026-11-04-smoke.json). Full local reports from that run are not included.
 
 ## Optional reranker decision
 
 A separate experiment used three same-product passages and the exact query EX-900 cleaning after use. The implemented hybrid baseline already ranked target.md first (reciprocal rank 1). An optional local qwen3:8b reranking request used strict permutation output, at most three 1,200-character candidates, temperature 0, seed 42, 128 predicted tokens and a ten-second request timeout. It timed out after approximately 12.080 seconds of measured wall time including transport overhead. No neural ranking was returned, so no neural relevance improvement is claimed. The fallback kept the baseline ranking.
 
-The decision is to retain BM25/RRF as the default and add no neural runtime dependency. One timed-out synthetic experiment is insufficient to choose a production reranker. The reusable experiment is scripts/evaluate_reranker.py; [its observations](../tests/evaluation/results/2026-11-04-reranker-smoke.json) distinguish fallback quality from a nonexistent neural result.
+The decision is to retain BM25/RRF as the default and add no neural runtime dependency. One timed-out synthetic experiment is insufficient to choose a production reranker. [Its observations](../tests/evaluation/results/2026-11-04-reranker-smoke.json) distinguish fallback quality from a nonexistent neural result. The optional evaluator has since been removed to avoid adding Python as a project requirement.
 
 ## Limits and rollout
 

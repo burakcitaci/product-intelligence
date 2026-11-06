@@ -11,7 +11,7 @@ if [[ -f "$state_file" ]]; then
     pkill -TERM -P "$frontend_pid" 2>/dev/null || true
     kill -TERM "$frontend_pid" 2>/dev/null || true
   fi
-  rm -f -- "$state_file" "$project_root/.run/frontend.pid"
+  rm -f -- "$state_file"
 fi
 
 cd "$project_root"

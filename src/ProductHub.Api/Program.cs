@@ -54,12 +54,16 @@ if (
 var app = builder.Build();
 
 if (
-    !string.IsNullOrWhiteSpace(builder.Configuration["OTEL_EXPORTER_OTLP_ENDPOINT"])
+    !string.IsNullOrWhiteSpace(
+        builder.Configuration["OTEL_EXPORTER_OTLP_ENDPOINT"]
+            ?? builder.Configuration["OTEL_EXPORTER_OTLP_LOGS_ENDPOINT"]
+            ?? builder.Configuration["OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"]
+    )
     && !string.IsNullOrWhiteSpace(builder.Configuration["OTEL_EXPORTER_OTLP_HEADERS"])
 )
 {
     app.Logger.LogInformation(
-        "OpenTelemetry log export is enabled for service {ServiceName}",
+        "OpenTelemetry export is enabled for service {ServiceName}",
         builder.Configuration["OTEL_SERVICE_NAME"] ?? "product-hub-api"
     );
 }

@@ -1,6 +1,7 @@
 using OpenTelemetry.Exporter;
 using OpenTelemetry.Logs;
 using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
 
 namespace ProductHub.Api.Telemetry;
 
@@ -12,41 +13,71 @@ public static class OpenTelemetryLoggingExtensions
         IHostEnvironment environment
     )
     {
-        var endpoint = configuration["OTEL_EXPORTER_OTLP_LOGS_ENDPOINT"];
-        if (string.IsNullOrWhiteSpace(endpoint))
-        {
-            var baseEndpoint = configuration["OTEL_EXPORTER_OTLP_ENDPOINT"];
-            if (!string.IsNullOrWhiteSpace(baseEndpoint))
-                endpoint = $"{baseEndpoint.TrimEnd('/')}/v1/logs";
-        }
-
         var headers = configuration["OTEL_EXPORTER_OTLP_HEADERS"];
-        if (string.IsNullOrWhiteSpace(endpoint) || string.IsNullOrWhiteSpace(headers))
+        if (string.IsNullOrWhiteSpace(headers))
             return logging;
 
         var protocol = configuration["OTEL_EXPORTER_OTLP_PROTOCOL"] ?? "http/protobuf";
         if (!protocol.Equals("http/protobuf", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException(
-                "ProductHub log export requires OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf."
+                "ProductHub telemetry export requires OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf."
             );
 
-        var endpointUri = new Uri(endpoint, UriKind.Absolute);
-        var allowInsecureLocalExporter =
-            environment.IsDevelopment()
-            && configuration.GetValue<bool>("OTEL_EXPORTER_OTLP_INSECURE");
-        if (
-            endpointUri.Scheme != Uri.UriSchemeHttps
-            && !endpointUri.IsLoopback
-            && !allowInsecureLocalExporter
-        )
-            throw new InvalidOperationException(
-                "The OTLP endpoint must use HTTPS. Development containers may explicitly set "
-                    + "OTEL_EXPORTER_OTLP_INSECURE=true for a trusted local exporter."
-            );
+        var logsEndpoint = GetEndpoint(configuration, "LOGS");
+        if (logsEndpoint is not null)
+        {
+            ValidateEndpoint(logsEndpoint, configuration, environment);
+            logging.AddOpenTelemetry(options =>
+            {
+                options.SetResourceBuilder(CreateResource(configuration, environment));
+                options.IncludeFormattedMessage = true;
+                options.IncludeScopes = true;
+                options.ParseStateValues = true;
+                options.AddOtlpExporter(exporter =>
+                    ConfigureExporter(exporter, logsEndpoint, headers)
+                );
+            });
+        }
 
+        var tracesEndpoint = GetEndpoint(configuration, "TRACES");
+        if (tracesEndpoint is not null)
+        {
+            ValidateEndpoint(tracesEndpoint, configuration, environment);
+            logging.Services.AddOpenTelemetry().WithTracing(tracing =>
+                tracing
+                    .SetResourceBuilder(CreateResource(configuration, environment))
+                    .AddAspNetCoreInstrumentation()
+                    .AddHttpClientInstrumentation()
+                    .AddSqlClientInstrumentation()
+                    .AddOtlpExporter(exporter =>
+                        ConfigureExporter(exporter, tracesEndpoint, headers)
+                    )
+            );
+        }
+
+        return logging;
+    }
+
+    private static Uri? GetEndpoint(IConfiguration configuration, string signal)
+    {
+        var signalEndpoint = configuration[$"OTEL_EXPORTER_OTLP_{signal}_ENDPOINT"];
+        if (!string.IsNullOrWhiteSpace(signalEndpoint))
+            return new Uri(signalEndpoint, UriKind.Absolute);
+
+        var endpoint = configuration["OTEL_EXPORTER_OTLP_ENDPOINT"];
+        return string.IsNullOrWhiteSpace(endpoint)
+            ? null
+            : new Uri($"{endpoint.TrimEnd('/')}/v1/{signal.ToLowerInvariant()}", UriKind.Absolute);
+    }
+
+    private static ResourceBuilder CreateResource(
+        IConfiguration configuration,
+        IHostEnvironment environment
+    )
+    {
         var serviceName = configuration["OTEL_SERVICE_NAME"] ?? "product-hub-api";
         var serviceVersion = typeof(Program).Assembly.GetName().Version?.ToString();
-        var resource = ResourceBuilder
+        return ResourceBuilder
             .CreateDefault()
             .AddService(
                 serviceName: serviceName,
@@ -59,22 +90,37 @@ public static class OpenTelemetryLoggingExtensions
                     environment.EnvironmentName
                 ),
             ]);
+    }
 
-        logging.AddOpenTelemetry(options =>
-        {
-            options.SetResourceBuilder(resource);
-            options.IncludeFormattedMessage = true;
-            options.IncludeScopes = true;
-            options.ParseStateValues = true;
-            options.AddOtlpExporter(exporter =>
-            {
-                exporter.Endpoint = endpointUri;
-                exporter.Protocol = OtlpExportProtocol.HttpProtobuf;
-                exporter.Headers = headers;
-                exporter.TimeoutMilliseconds = 10_000;
-            });
-        });
+    private static void ValidateEndpoint(
+        Uri endpoint,
+        IConfiguration configuration,
+        IHostEnvironment environment
+    )
+    {
+        var allowInsecureLocalExporter =
+            environment.IsDevelopment()
+            && configuration.GetValue<bool>("OTEL_EXPORTER_OTLP_INSECURE");
+        if (
+            endpoint.Scheme != Uri.UriSchemeHttps
+            && !endpoint.IsLoopback
+            && !allowInsecureLocalExporter
+        )
+            throw new InvalidOperationException(
+                "The OTLP endpoint must use HTTPS. Development containers may explicitly set "
+                    + "OTEL_EXPORTER_OTLP_INSECURE=true for a trusted local exporter."
+            );
+    }
 
-        return logging;
+    private static void ConfigureExporter(
+        OtlpExporterOptions exporter,
+        Uri endpoint,
+        string headers
+    )
+    {
+        exporter.Endpoint = endpoint;
+        exporter.Protocol = OtlpExportProtocol.HttpProtobuf;
+        exporter.Headers = headers;
+        exporter.TimeoutMilliseconds = 10_000;
     }
 }

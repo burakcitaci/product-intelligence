@@ -24,14 +24,6 @@ jobs:
         run: dotnet test tests/ProductHub.UnitTests/ProductHub.UnitTests.csproj --configuration Release --no-build
       - name: SQL Server integration and generation contract tests
         run: dotnet test tests/ProductHub.IntegrationTests/ProductHub.IntegrationTests.csproj --configuration Release --no-build
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Offline evaluation runner tests
-        run: python -m unittest discover -s tests/evaluation -p 'test_*.py'
-      - name: Validate evaluation matrix without model calls
-        run: python scripts/evaluate.py --dry-run --max-runs 4
-
   frontend:
     runs-on: ubuntu-latest
     defaults:

@@ -49,13 +49,10 @@ fi
 
 mkdir -p "$run_root"
 echo "Starting frontend..."
-(
-  cd "$web_root"
-  nohup npm run dev -- --host 127.0.0.1 >"$run_root/frontend.log" 2>"$run_root/frontend-error.log" &
-  echo "$!" >"$run_root/frontend.pid"
-)
-
-frontend_pid="$(cat "$run_root/frontend.pid")"
+pushd "$web_root" >/dev/null
+nohup npm run dev -- --host 127.0.0.1 >"$run_root/frontend.log" 2>"$run_root/frontend-error.log" &
+frontend_pid=$!
+popd >/dev/null
 sleep 3
 if ! kill -0 "$frontend_pid" 2>/dev/null; then
   echo "Frontend stopped during startup. See $run_root/frontend-error.log" >&2

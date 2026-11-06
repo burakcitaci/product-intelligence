@@ -20,16 +20,7 @@ The project already has a compact review workspace, facts inclusion controls, No
 
 ## Stage 1 — Real-model evaluation runner
 
-Status: implemented; 16 offline tests pass. A bounded real-model four-mode smoke is recorded, including one numeric conflict and the updated quality gate. This is not the full 384-combination benchmark. See [Evaluation guide](evaluation.md), the runner, and the 48-case dataset.
-
-- Expand the small retrieval baseline into approximately 40–60 representative German/English cases covering product identity, units, exact model names, instructions, conflicting documents, missing evidence, and prompt injection attempts.
-- Compare the four retrieval modes with facts included and excluded on stable input snapshots.
-- Add a local evaluation command with case/mode/model filters, dry-run support, bounded run size, cancellation, and machine-readable reports.
-- Measure retrieval recall, supported/unsupported claims, factual coverage, JSON validity, latency, tokens, and human editorial acceptance where applicable.
-- Separate deterministic checks from human or optional model judging; do not label a self-reported model score as verified confidence.
-- Document how to run a small smoke evaluation and a full benchmark, including model/version and hardware context.
-
-Acceptance: deterministic evaluator tests pass; a documented bounded real-model run can produce reproducible reports without being required for every build.
+The optional Python evaluator and its offline tests were removed so cloning and running the application does not require Python. Historical measurements and limitations remain in [acceptance results](evaluation-results-2026-11-04.md). Reintroduce a benchmark only when it can be maintained without increasing the default setup burden.
 
 ## Stage 2 — Schema-constrained generation
 
