@@ -45,6 +45,11 @@ builder
 builder.Services.AddAuthorization();
 builder.Services.AddApplication();
 builder.Services.AddInfrastructure(builder.Configuration);
+if (
+    !builder.Configuration.GetValue<bool>("Ai:DisableJobWorker")
+    && !builder.Environment.IsEnvironment("Testing")
+)
+    builder.Services.AddHostedService<ProductHub.Api.Services.GenerationJobWorker>();
 
 var app = builder.Build();
 

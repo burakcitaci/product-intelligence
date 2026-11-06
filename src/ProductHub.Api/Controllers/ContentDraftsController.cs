@@ -61,8 +61,21 @@ public sealed class ContentDraftsController(ContentGenerationService service) : 
     ) => Ok(await service.GetGenerationMetadataAsync(id, cancellationToken));
 
     [HttpPost("api/drafts/{id:guid}/approve")]
-    public Task<ContentDraftDto> Approve(Guid id, CancellationToken cancellationToken) =>
-        service.ReviewAsync(id, true, cancellationToken);
+    public Task<ContentDraftDto> Approve(
+        Guid id,
+        CancellationToken cancellationToken,
+        [FromBody(
+            EmptyBodyBehavior = Microsoft.AspNetCore.Mvc.ModelBinding.EmptyBodyBehavior.Allow
+        )]
+            ReviewDraftRequest? request = null
+    ) =>
+        service.ReviewAsync(
+            id,
+            true,
+            cancellationToken,
+            request?.AcknowledgeWarnings ?? false,
+            User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value
+        );
 
     [HttpPost("api/drafts/{id:guid}/reject")]
     public Task<ContentDraftDto> Reject(Guid id, CancellationToken cancellationToken) =>
@@ -106,3 +119,6 @@ public sealed record UpdateDraftRequest(
     string LongDescription,
     IReadOnlyList<string>? Highlights
 );
+
+/// <summary>Explicit acknowledgement that the authenticated administrator inspected claim-review warnings.</summary>
+public sealed record ReviewDraftRequest(bool AcknowledgeWarnings = false);

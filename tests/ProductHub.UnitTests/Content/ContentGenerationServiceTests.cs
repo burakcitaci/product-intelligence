@@ -370,6 +370,58 @@ public sealed class ContentGenerationServiceTests
         Assert.Equal(0, store.SaveCount);
     }
 
+    [Fact]
+    public async Task Approval_RequiresAcknowledgementAndRecordsReviewer()
+    {
+        var store = new FakeStore { Product = Product.Create("SKU-1", "Bottle", "Acme") };
+        var service = CreateService(store, new FakeGenerator());
+        var draft = await service.GenerateAsync(
+            new(store.Product.Id, "en", "review", "trace"),
+            default
+        );
+        await Assert.ThrowsAsync<ConflictException>(() =>
+            service.ReviewAsync(draft.Id, true, default)
+        );
+        Assert.Equal(ContentDraftStatus.PendingReview, store.Draft!.Status);
+        var approved = await service.ReviewAsync(draft.Id, true, default, true, "reviewer-123");
+        Assert.True(approved.Review!.WarningsAcknowledged);
+        Assert.Equal("reviewer-123", approved.Review.AcknowledgedBy);
+        Assert.NotNull(approved.Review.AcknowledgedAt);
+    }
+
+    [Fact]
+    public async Task Editing_UsesOriginalEvidenceAfterProductFactsChange()
+    {
+        var store = new FakeStore
+        {
+            Product = Product.Create(
+                "SKU-1",
+                "Bottle",
+                "Acme",
+                attributes: [new ProductAttribute("Capacity", "750", "ml")]
+            ),
+        };
+        var service = CreateService(store, new FakeGenerator());
+        var draft = await service.GenerateAsync(
+            new(store.Product.Id, "en", "original", "trace"),
+            default
+        );
+        store.Product.UpdateDetails(
+            "Bottle",
+            "Acme",
+            null,
+            [new ProductAttribute("Capacity", "1000", "ml")]
+        );
+        var edited = await service.UpdateDraftAsync(
+            draft.Id,
+            new("Capacity: 750 ml", "Short", "Long", ["One", "Two", "Three"]),
+            default
+        );
+        Assert.Equal("750", edited.Review!.Context.Attributes.Single().Value);
+        Assert.Equal("Supported", edited.Review.Claims.Single(c => c.Field == "title").Status);
+        Assert.False(edited.Review.WarningsAcknowledged);
+    }
+
     private static ContentGenerationService CreateService(
         FakeStore store,
         FakeGenerator generator,

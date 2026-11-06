@@ -21,6 +21,12 @@ public interface IKnowledgeDocumentStore
         int limit,
         CancellationToken cancellationToken
     );
+    Task<IReadOnlyList<DocumentChunk>> SearchLexicalChunksAsync(
+        Guid? productId,
+        IReadOnlyList<string> terms,
+        int limit,
+        CancellationToken cancellationToken
+    );
     Task<bool> ExistsByHashAsync(
         Guid productId,
         string sha256,

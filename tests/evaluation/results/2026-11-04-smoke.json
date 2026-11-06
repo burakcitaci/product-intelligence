@@ -1,0 +1,100 @@
+{
+  "date": "2026-11-04",
+  "scope": "One English bottle fixture, facts on, four modes; not full quality acceptance",
+  "datasetSha256": "0b51f4f2a9124bdfd2e403e54aa4ceaa9ae42744597d78cc88d217dff844adc1",
+  "fixture": "bottle-baseline-en",
+  "modelRevision": "unknown",
+  "promptVersion": "product-description-v4",
+  "schemaVersion": "product-content-v2",
+  "parameters": {
+    "temperature": 0,
+    "seed": 42,
+    "maxOutputTokens": 2048
+  },
+  "scoringVersion": 2,
+  "runs": [
+    {
+      "mode": "None",
+      "wallLatencyMs": 43458,
+      "retrievalLatencyMs": null,
+      "inputTokens": 661,
+      "outputTokens": 808,
+      "draftContractValid": true,
+      "factualCoverageProxy": 1.0,
+      "sourceRecallAtK": null,
+      "riskGatePassed": false,
+      "claimCounts": {
+        "Supported": 1,
+        "Unsupported": 0,
+        "Conflict": 1,
+        "Advisory": 0,
+        "Unverified": 7
+      },
+      "flaggedClaims": [
+        {
+          "text": "Its 75,0 ml capacity makes it ideal for hiking or daily use.",
+          "status": "Conflict",
+          "reason": "A numeric value differs from the supplied values for the same unit. Check the attribute and context manually."
+        }
+      ]
+    },
+    {
+      "mode": "Naive",
+      "wallLatencyMs": 18948,
+      "retrievalLatencyMs": 2421,
+      "inputTokens": 880,
+      "outputTokens": 348,
+      "draftContractValid": true,
+      "factualCoverageProxy": 1.0,
+      "sourceRecallAtK": 1.0,
+      "riskGatePassed": true,
+      "claimCounts": {
+        "Supported": 1,
+        "Unsupported": 0,
+        "Conflict": 0,
+        "Advisory": 0,
+        "Unverified": 8
+      },
+      "flaggedClaims": []
+    },
+    {
+      "mode": "Advanced",
+      "wallLatencyMs": 30012,
+      "retrievalLatencyMs": 2573,
+      "inputTokens": 880,
+      "outputTokens": 610,
+      "draftContractValid": true,
+      "factualCoverageProxy": 1.0,
+      "sourceRecallAtK": 1.0,
+      "riskGatePassed": true,
+      "claimCounts": {
+        "Supported": 1,
+        "Unsupported": 0,
+        "Conflict": 0,
+        "Advisory": 0,
+        "Unverified": 6
+      },
+      "flaggedClaims": []
+    },
+    {
+      "mode": "Graph",
+      "wallLatencyMs": 29216,
+      "retrievalLatencyMs": 2517,
+      "inputTokens": 880,
+      "outputTokens": 610,
+      "draftContractValid": true,
+      "factualCoverageProxy": 1.0,
+      "sourceRecallAtK": 1.0,
+      "riskGatePassed": true,
+      "claimCounts": {
+        "Supported": 1,
+        "Unsupported": 0,
+        "Conflict": 0,
+        "Advisory": 0,
+        "Unverified": 6
+      },
+      "flaggedClaims": []
+    }
+  ],
+  "humanEditorialAcceptance": null
+}

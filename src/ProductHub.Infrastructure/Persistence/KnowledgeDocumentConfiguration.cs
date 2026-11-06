@@ -22,6 +22,8 @@ internal sealed class KnowledgeDocumentConfiguration : IEntityTypeConfiguration<
         b.HasIndex(x => new { x.ProductId, x.Sha256 }).IsUnique();
         b.Property(x => x.Status).HasConversion<string>().HasMaxLength(30);
         b.Property(x => x.ErrorCode).HasMaxLength(100);
+        b.Property(x => x.ExtractionVersion).HasMaxLength(100).IsRequired();
+        b.Property(x => x.SupersededByDocumentId).IsConcurrencyToken();
         b.HasMany(x => x.Chunks)
             .WithOne(x => x.Document)
             .HasForeignKey(x => x.DocumentId)

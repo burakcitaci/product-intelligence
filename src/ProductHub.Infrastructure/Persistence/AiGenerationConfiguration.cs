@@ -32,6 +32,7 @@ internal sealed class AiGenerationConfiguration : IEntityTypeConfiguration<AiGen
             .HasMaxLength(30)
             .IsUnicode(false);
         builder.Property(x => x.RetrievedSourcesJson).HasColumnType("nvarchar(max)");
+        builder.Property(x => x.GenerationParametersJson).HasColumnType("nvarchar(max)");
         builder.Property(x => x.RequestedTopK);
         builder.Property(x => x.IncludeFacts);
         builder.Property(x => x.RetrievalErrorCode).HasMaxLength(100).IsUnicode(false);

@@ -1,0 +1,32 @@
+{
+  "status": "bounded-reranker-failed",
+  "scope": "One synthetic exact-model/cleaning query with three same-product documents",
+  "model": "qwen3:8b",
+  "timeoutSeconds": 10,
+  "candidateLimit": 3,
+  "productionRankingChanged": false,
+  "baseline": [
+    {
+      "id": 0,
+      "fileName": "target.md",
+      "score": 1
+    },
+    {
+      "id": 1,
+      "fileName": "noise.md",
+      "score": 0.9760625
+    },
+    {
+      "id": 2,
+      "fileName": "packaging.md",
+      "score": 0.9760625
+    }
+  ],
+  "errorType": "TimeoutError",
+  "fallback": "Preserve the original BM25/RRF ranking",
+  "addedLatencyMs": 12080,
+  "baselineReciprocalRank": 1.0,
+  "rerankedReciprocalRank": null,
+  "decision": "Do not enable a neural reranker by default: one synthetic query cannot establish a quality/latency benefit; preserve the deterministic baseline.",
+  "fallbackReciprocalRank": 1.0
+}

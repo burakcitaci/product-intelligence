@@ -53,7 +53,10 @@ public sealed class DocumentIngestionService(
                     "embedding-count-mismatch",
                     "Embedding count did not match chunk count."
                 );
-            document.Complete(chunks);
+            document.RecordExtractionVersion(
+                $"local-extractor-v1/chunk-v1/{settings.Value.ChunkSize}/{settings.Value.ChunkOverlap}"
+            );
+            document.PrepareChunks(chunks);
             await store.AddChunksAsync(document.Chunks, cancellationToken);
             await vectors.UpsertAsync(
                 document
@@ -72,6 +75,7 @@ public sealed class DocumentIngestionService(
                     .ToArray(),
                 cancellationToken
             );
+            document.Complete();
             await store.SaveChangesAsync(cancellationToken);
             return Map(document);
         }
@@ -106,6 +110,33 @@ public sealed class DocumentIngestionService(
         Guid productId,
         CancellationToken cancellationToken
     ) => (await store.ListAsync(productId, cancellationToken)).Select(Map).ToArray();
+
+    public async Task<DocumentDto> SupersedeAsync(
+        Guid productId,
+        Guid documentId,
+        Guid replacementId,
+        CancellationToken ct
+    )
+    {
+        var original =
+            await store.GetAsync(documentId, ct)
+            ?? throw new NotFoundException("Document was not found.");
+        var replacement =
+            await store.GetAsync(replacementId, ct)
+            ?? throw new NotFoundException("Replacement document was not found.");
+        if (original.ProductId != productId || replacement.ProductId != productId)
+            throw new NotFoundException("Document was not found for this product.");
+        try
+        {
+            original.SupersedeWith(replacement);
+        }
+        catch (InvalidOperationException error)
+        {
+            throw new ConflictException(error.Message);
+        }
+        await store.SaveChangesAsync(ct);
+        return Map(original);
+    }
 
     public async Task DeleteAsync(
         Guid productId,
@@ -197,7 +228,11 @@ public sealed class DocumentIngestionService(
             x.Chunks.Count,
             x.CreatedAt,
             x.CompletedAt,
-            x.ErrorCode
+            x.ErrorCode,
+            x.Sha256,
+            x.ExtractionVersion,
+            x.SupersededByDocumentId,
+            x.SupersededAt
         );
 }
 

@@ -39,6 +39,40 @@ public sealed class KnowledgeDocument
     public DateTimeOffset CreatedAt { get; private set; }
     public DateTimeOffset? CompletedAt { get; private set; }
     public string? ErrorCode { get; private set; }
+    public string ExtractionVersion { get; private set; } = "legacy";
+    public Guid? SupersededByDocumentId { get; private set; }
+    public DateTimeOffset? SupersededAt { get; private set; }
+
+    public void RecordExtractionVersion(string version)
+    {
+        if (Status != DocumentIngestionStatus.Pending)
+            throw new InvalidOperationException("Extraction is already terminal.");
+        ArgumentException.ThrowIfNullOrWhiteSpace(version);
+        if (version.Length > 100)
+            throw new ArgumentException("Extraction version is too long.");
+        ExtractionVersion = version;
+    }
+
+    public void SupersedeWith(KnowledgeDocument replacement)
+    {
+        if (SupersededByDocumentId == replacement.Id)
+            return;
+        if (
+            Status != DocumentIngestionStatus.Completed
+            || replacement.Status != DocumentIngestionStatus.Completed
+            || ProductId != replacement.ProductId
+            || replacement.Id == Id
+            || SupersededByDocumentId is not null
+            || replacement.SupersededByDocumentId is not null
+            || replacement.CreatedAt <= CreatedAt
+        )
+            throw new InvalidOperationException(
+                "Choose a newer completed active document for the same product."
+            );
+        SupersededByDocumentId = replacement.Id;
+        SupersededAt = DateTimeOffset.UtcNow;
+    }
+
     public IReadOnlyCollection<DocumentChunk> Chunks => _chunks;
 
     public static KnowledgeDocument Start(
@@ -64,8 +98,16 @@ public sealed class KnowledgeDocument
 
     public void Complete(IEnumerable<string> chunks)
     {
+        PrepareChunks(chunks);
+        Complete();
+    }
+
+    public void PrepareChunks(IEnumerable<string> chunks)
+    {
         if (Status != DocumentIngestionStatus.Pending)
             throw new InvalidOperationException("Document ingestion is already terminal.");
+        if (_chunks.Count > 0)
+            throw new InvalidOperationException("Chunks have already been prepared.");
         var values = chunks
             .Where(x => !string.IsNullOrWhiteSpace(x))
             .Select(x => x.Trim())
@@ -74,6 +116,14 @@ public sealed class KnowledgeDocument
             throw new ArgumentException("At least one document chunk is required.", nameof(chunks));
         for (var index = 0; index < values.Length; index++)
             _chunks.Add(DocumentChunk.Create(Id, index, values[index]));
+    }
+
+    public void Complete()
+    {
+        if (Status != DocumentIngestionStatus.Pending || _chunks.Count == 0)
+            throw new InvalidOperationException(
+                "Only a pending document with prepared chunks can complete."
+            );
         Status = DocumentIngestionStatus.Completed;
         CompletedAt = DateTimeOffset.UtcNow;
     }

@@ -22,6 +22,15 @@ jobs:
         run: dotnet build ProductHub.slnx --configuration Release --no-restore
       - name: Unit tests
         run: dotnet test tests/ProductHub.UnitTests/ProductHub.UnitTests.csproj --configuration Release --no-build
+      - name: SQL Server integration and generation contract tests
+        run: dotnet test tests/ProductHub.IntegrationTests/ProductHub.IntegrationTests.csproj --configuration Release --no-build
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Offline evaluation runner tests
+        run: python -m unittest discover -s tests/evaluation -p 'test_*.py'
+      - name: Validate evaluation matrix without model calls
+        run: python scripts/evaluate.py --dry-run --max-runs 4
 
   frontend:
     runs-on: ubuntu-latest
@@ -37,5 +46,17 @@ jobs:
           cache-dependency-path: src/ProductHub.Web/package-lock.json
       - name: Install dependencies
         run: npm ci
+      - name: Comparison tests
+        run: npm test
+      - name: Install browser for acceptance tests
+        run: npx playwright install --with-deps chromium
+      - name: Desktop and mobile acceptance tests
+        run: npm run test:browser
+      - name: Browser failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-results
+          path: .artifacts/browser-results
       - name: Build
         run: npm run build

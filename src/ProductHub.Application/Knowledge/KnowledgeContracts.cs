@@ -18,7 +18,11 @@ public sealed record DocumentDto(
     int ChunkCount,
     DateTimeOffset CreatedAt,
     DateTimeOffset? CompletedAt,
-    string? ErrorCode
+    string? ErrorCode,
+    string? Revision = null,
+    string ExtractionVersion = "legacy",
+    Guid? SupersededByDocumentId = null,
+    DateTimeOffset? SupersededAt = null
 );
 
 public enum RetrievalMode
@@ -45,7 +49,15 @@ public sealed record KnowledgeSearchResult(
     float Score,
     string Citation,
     int? GraphHops = null,
-    IReadOnlyList<string>? GraphPath = null
+    IReadOnlyList<string>? GraphPath = null,
+    string? DocumentRevision = null,
+    string? ChunkRevision = null,
+    string? RetrievalVersion = null,
+    int DenseCandidateCount = 0,
+    int LexicalCandidateCount = 0,
+    string? GraphRevision = null,
+    bool? GraphCacheHit = null,
+    IReadOnlyList<string>? GraphConcepts = null
 );
 
 public sealed record ExtractedDocument(string Text);

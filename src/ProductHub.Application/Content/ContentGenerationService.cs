@@ -19,11 +19,13 @@ public sealed class ContentGenerationService(
 {
     public async Task<ContentDraftDto> GenerateAsync(
         GenerateDraftCommand command,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        Func<string, CancellationToken, Task>? progress = null
     )
     {
         var options = settings.Value;
         Validate(command, options);
+        command = command with { IdempotencyKey = command.IdempotencyKey.Trim() };
         var retrievalMode = ResolveRetrievalMode(command);
         var useRag = retrievalMode != RetrievalMode.None;
         var product =
@@ -73,6 +75,16 @@ public sealed class ContentGenerationService(
             useRag ? command.TopK : null,
             includeFacts: command.IncludeFacts
         );
+        generation.RecordParameters(
+            JsonSerializer.Serialize(
+                new GenerationParametersDto(
+                    GeneratedContentContract.Version,
+                    options.Temperature,
+                    options.Seed,
+                    options.MaxOutputTokens
+                )
+            )
+        );
         await store.AddGenerationAsync(generation, cancellationToken);
         try
         {
@@ -85,6 +97,8 @@ public sealed class ContentGenerationService(
 
         try
         {
+            if (progress is not null)
+                await progress("Retrieving", cancellationToken);
             IReadOnlyList<KnowledgeSearchResult> knowledge = [];
             if (useRag)
             {
@@ -135,7 +149,15 @@ public sealed class ContentGenerationService(
                             x.Citation,
                             x.Score,
                             x.GraphHops,
-                            x.GraphPath
+                            x.GraphPath,
+                            x.DocumentRevision,
+                            x.ChunkRevision,
+                            x.RetrievalVersion,
+                            x.DenseCandidateCount,
+                            x.LexicalCandidateCount,
+                            x.GraphRevision,
+                            x.GraphCacheHit,
+                            x.GraphConcepts
                         ))
                         .ToArray();
                     generation.RecordRetrieval(
@@ -173,18 +195,35 @@ public sealed class ContentGenerationService(
                         .Attributes.Select(x => new ProductFact(x.Name, x.Value, x.Unit))
                         .ToArray()
                     : [],
-                knowledge.Select(x => new GroundingExcerpt(x.Citation, x.Text)).ToArray(),
+                knowledge
+                    .Select(x => new GroundingExcerpt(
+                        x.Citation,
+                        x.Text,
+                        x.DocumentId,
+                        x.ChunkId,
+                        x.DocumentRevision,
+                        x.ChunkRevision
+                    ))
+                    .ToArray(),
                 command.IncludeFacts
             );
+            if (progress is not null)
+                await progress("Generating", cancellationToken);
             var generated = await generator.GenerateAsync(
                 context,
                 new GenerationOptions(
                     generation.Language,
                     generation.PromptVersion,
-                    generation.Model
+                    generation.Model,
+                    options.Temperature,
+                    options.Seed,
+                    options.MaxOutputTokens
                 ),
                 cancellationToken
             );
+            if (progress is not null)
+                await progress("Validating", cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
             ValidateGenerated(generated);
 
             var draft = ContentDraft.Create(
@@ -195,6 +234,9 @@ public sealed class ContentGenerationService(
                 generated.LongDescription,
                 generated.Highlights,
                 generation.Id
+            );
+            draft.RecordClaimReview(
+                JsonSerializer.Serialize(ClaimReview.Assess(generated, context))
             );
             generation.Complete(generated.InputTokens, generated.OutputTokens);
             await store.AddDraftAsync(draft, cancellationToken);
@@ -247,7 +289,9 @@ public sealed class ContentGenerationService(
     public async Task<ContentDraftDto> ReviewAsync(
         Guid draftId,
         bool approve,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        bool acknowledgeWarnings = false,
+        string? reviewerId = null
     )
     {
         var draft =
@@ -257,6 +301,29 @@ public sealed class ContentGenerationService(
         {
             if (approve)
             {
+                if (draft.ClaimReviewJson is not null)
+                {
+                    var review = JsonSerializer.Deserialize<ClaimReviewReport>(
+                        draft.ClaimReviewJson
+                    )!;
+                    if (review.RequiresAcknowledgement)
+                    {
+                        if (!acknowledgeWarnings || string.IsNullOrWhiteSpace(reviewerId))
+                            throw new ConflictException(
+                                "Inspect the claim evidence and explicitly acknowledge review warnings before approval."
+                            );
+                        draft.RecordClaimReview(
+                            JsonSerializer.Serialize(
+                                review with
+                                {
+                                    WarningsAcknowledged = true,
+                                    AcknowledgedBy = reviewerId,
+                                    AcknowledgedAt = DateTimeOffset.UtcNow,
+                                }
+                            )
+                        );
+                    }
+                }
                 draft.Approve();
                 var siblings = await store.ListDraftsForUpdateAsync(
                     draft.ProductId,
@@ -288,6 +355,14 @@ public sealed class ContentGenerationService(
         if (draft.Status != ContentDraftStatus.Approved)
             throw new ConflictException("Only approved drafts can be made current.");
 
+        if (draft.ClaimReviewJson is not null)
+        {
+            var review = JsonSerializer.Deserialize<ClaimReviewReport>(draft.ClaimReviewJson)!;
+            if (review.RequiresAcknowledgement && !review.WarningsAcknowledged)
+                throw new ConflictException(
+                    "Review warnings must be acknowledged before publishing."
+                );
+        }
         var siblings = await store.ListDraftsForUpdateAsync(
             draft.ProductId,
             draft.Language,
@@ -328,6 +403,23 @@ public sealed class ContentGenerationService(
         {
             throw new ConflictException("Only pending drafts can be edited.");
         }
+        if (draft.ClaimReviewJson is not null)
+        {
+            var original = JsonSerializer.Deserialize<ClaimReviewReport>(draft.ClaimReviewJson)!;
+            draft.RecordClaimReview(
+                JsonSerializer.Serialize(
+                    ClaimReview.Assess(
+                        new(
+                            draft.Title,
+                            draft.ShortDescription,
+                            draft.LongDescription,
+                            draft.Highlights
+                        ),
+                        original.Context
+                    )
+                )
+            );
+        }
         await store.SaveChangesAsync(cancellationToken);
         return Map(draft);
     }
@@ -343,36 +435,7 @@ public sealed class ContentGenerationService(
         var generation =
             await store.GetGenerationByIdAsync(draft.GenerationId, cancellationToken)
             ?? throw new NotFoundException($"Generation '{draft.GenerationId}' was not found.");
-        return new(
-            generation.Id,
-            generation.Provider,
-            generation.Model,
-            generation.PromptVersion,
-            generation.StartedAt,
-            generation.CompletedAt,
-            generation.DurationMs,
-            generation.InputTokens,
-            generation.OutputTokens,
-            generation.Status.ToString(),
-            generation.ErrorCode,
-            generation.CorrelationId,
-            generation.GroundingMode.ToString(),
-            generation.RequestedTopK,
-            generation.RetrievalStatus.ToString(),
-            generation.RetrievalDurationMs,
-            generation.RetrievedChunkCount,
-            generation.RetrievedDocumentCount,
-            DeserializeSources(generation.RetrievedSourcesJson),
-            generation.RetrievalErrorCode,
-            generation.IncludeFacts,
-            generation.GroundingMode switch
-            {
-                GroundingMode.GraphRag => "Graph",
-                GroundingMode.AdvancedRag => "Advanced",
-                GroundingMode.Rag => "Naive",
-                _ => "None",
-            }
-        );
+        return GenerationMetadataMapper.Map(generation);
     }
 
     private async Task PersistFailureAsync(AiGeneration generation, string errorCode)
@@ -393,7 +456,7 @@ public sealed class ContentGenerationService(
         }
     }
 
-    private static void Validate(GenerateDraftCommand command, AiSettings settings)
+    public static void Validate(GenerateDraftCommand command, AiSettings settings)
     {
         var errors = new Dictionary<string, string[]>();
         if (command.ProductId == Guid.Empty)
@@ -436,24 +499,8 @@ public sealed class ContentGenerationService(
             _ => command.UseRag ? RetrievalMode.Naive : RetrievalMode.None,
         };
 
-    private static void ValidateGenerated(GeneratedProductContent content)
-    {
-        if (
-            string.IsNullOrWhiteSpace(content.Title)
-            || content.Title.Length > 200
-            || string.IsNullOrWhiteSpace(content.ShortDescription)
-            || content.ShortDescription.Length > 500
-            || string.IsNullOrWhiteSpace(content.LongDescription)
-            || content.LongDescription.Length > 8000
-            || content.Highlights is null
-            || content.Highlights.Count is < 3 or > 5
-            || content.Highlights.Any(x => string.IsNullOrWhiteSpace(x) || x.Length > 300)
-        )
-            throw new ContentGenerationException(
-                "invalid-output",
-                "The model returned incomplete or invalid JSON content."
-            );
-    }
+    private static void ValidateGenerated(GeneratedProductContent content) =>
+        GeneratedContentContract.Validate(content);
 
     private static Dictionary<string, string[]> ValidateDraftUpdate(UpdateDraftCommand command)
     {
@@ -478,22 +525,17 @@ public sealed class ContentGenerationService(
             ];
         if (
             command.Highlights is null
-            || command.Highlights.Count is < 3 or > 5
+            || command.Highlights.Count > 5
             || command.Highlights.Any(x => string.IsNullOrWhiteSpace(x) || x.Trim().Length > 300)
         )
             errors["highlights"] =
             [
-                "Three to five non-empty highlights are required; each may contain up to 300 characters.",
+                "At most five highlights are allowed; supplied highlights must be non-empty and at most 300 characters.",
             ];
         return errors;
     }
 
     private static string NormalizeLanguage(string language) => language.Trim().ToLowerInvariant();
-
-    private static IReadOnlyList<RetrievalSourceDto> DeserializeSources(string? json) =>
-        string.IsNullOrWhiteSpace(json)
-            ? []
-            : JsonSerializer.Deserialize<RetrievalSourceDto[]>(json) ?? [];
 
     private static ContentDraftDto Map(ContentDraft draft) =>
         new(
@@ -507,7 +549,10 @@ public sealed class ContentGenerationService(
             draft.Status,
             draft.IsCurrent,
             draft.CreatedAt,
-            draft.GenerationId
+            draft.GenerationId,
+            draft.ClaimReviewJson is null
+                ? null
+                : JsonSerializer.Deserialize<ClaimReviewReport>(draft.ClaimReviewJson)
         );
 }
 

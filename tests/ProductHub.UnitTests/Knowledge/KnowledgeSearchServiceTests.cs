@@ -7,6 +7,98 @@ namespace ProductHub.UnitTests.Knowledge;
 
 public sealed class KnowledgeSearchServiceTests
 {
+    [Theory]
+    [InlineData(RetrievalMode.Naive)]
+    [InlineData(RetrievalMode.Advanced)]
+    [InlineData(RetrievalMode.Graph)]
+    public async Task Retrieval_NeverReturnsSupersededVectorEvidence(RetrievalMode mode)
+    {
+        var store = new TestKnowledgeStore();
+        var product = Guid.NewGuid();
+        var old = store.Add(product, "old.md", "Thermostat cleaning obsolete evidence.");
+        var active = store.Add(product, "new.md", "Thermostat maintenance current evidence.");
+        var service = new KnowledgeSearchService(
+            store,
+            new TestEmbeddings(),
+            new TestVectors { Hits = [new(old.Chunks.Single().Id, 1f)] }
+        );
+        if (mode == RetrievalMode.Graph)
+            await service.SearchAsync(new("Thermostat", 3, product, mode), default);
+        old.SupersedeWith(active);
+        var results = await service.SearchAsync(new("Thermostat", 3, product, mode), default);
+        Assert.DoesNotContain(results, result => result.DocumentId == old.Id);
+        if (mode != RetrievalMode.Naive)
+            Assert.Equal(active.Id, Assert.Single(results).DocumentId);
+    }
+
+    [Theory]
+    [InlineData(RetrievalMode.Advanced)]
+    [InlineData(RetrievalMode.Graph)]
+    public async Task Hybrid_RecoversExactModelAbsentFromAllVectorResults(RetrievalMode mode)
+    {
+        var store = new TestKnowledgeStore();
+        var id = Guid.NewGuid();
+        var own = store.Add(
+            id,
+            "model.md",
+            "AX-900 maintenance: disconnect power before servicing."
+        );
+        store.Add(Guid.NewGuid(), "private.md", "AX-900 private design.");
+        var result = Assert.Single(
+            await new KnowledgeSearchService(
+                store,
+                new TestEmbeddings(),
+                new TestVectors()
+            ).SearchAsync(new("AX-900", 2, id, mode), default)
+        );
+        Assert.Equal(own.Id, result.DocumentId);
+        Assert.Equal(0, result.DenseCandidateCount);
+        Assert.Equal(1, result.LexicalCandidateCount);
+        Assert.NotEmpty(result.DocumentRevision!);
+        Assert.NotEmpty(result.ChunkRevision!);
+        Assert.Contains("v2", result.RetrievalVersion!);
+    }
+
+    [Fact]
+    public async Task Hybrid_RecoversGermanEnglishSynonyms()
+    {
+        var store = new TestKnowledgeStore();
+        var own = store.Add(Guid.NewGuid(), "care.md", "Cleaning with warm water.");
+        var results = await new KnowledgeSearchService(
+            store,
+            new TestEmbeddings(),
+            new TestVectors()
+        ).SearchAsync(new("Reinigung", 2, own.ProductId, RetrievalMode.Advanced), default);
+        Assert.Equal(own.Id, Assert.Single(results).DocumentId);
+    }
+
+    [Fact]
+    public async Task GraphCache_UsesFreshMembershipAndNeverReturnsDeletedEvidence()
+    {
+        var store = new TestKnowledgeStore();
+        var id = Guid.NewGuid();
+        var root = store.Add(id, "root.md", "Thermostat controls kettle temperature.");
+        var leaf = store.Add(id, "leaf.md", "Thermostat maintenance instructions.");
+        var service = new KnowledgeSearchService(
+            store,
+            new TestEmbeddings(),
+            new TestVectors { Hits = [new(root.Chunks.Single().Id, 1f)] }
+        );
+        var query = new SearchKnowledgeQuery("Kettle", 3, id, RetrievalMode.Graph);
+        var first = await service.SearchAsync(query, default);
+        Assert.Contains(first, result => result.DocumentId == leaf.Id);
+        Assert.All(first, result => Assert.False(result.GraphCacheHit));
+        var repeat = await service.SearchAsync(query, default);
+        Assert.All(repeat, result => Assert.True(result.GraphCacheHit));
+        store.Remove(leaf);
+        var afterDelete = await service.SearchAsync(query, default);
+        Assert.DoesNotContain(afterDelete, result => result.DocumentId == leaf.Id);
+        Assert.NotEqual(first[0].GraphRevision, afterDelete[0].GraphRevision);
+        store.Add(id, "replacement.md", "Thermostat replacement revision and safety.");
+        var afterUpload = await service.SearchAsync(query, default);
+        Assert.NotEqual(afterDelete[0].GraphRevision, afterUpload[0].GraphRevision);
+    }
+
     [Fact]
     public async Task Naive_UsesSingleQueryAndPreservesVectorRanking()
     {
@@ -217,6 +309,7 @@ internal sealed class TestVectors : IVectorStore
     public List<int> Limits { get; } = [];
     public List<Guid?> ProductIds { get; } = [];
     public Exception? Error { get; init; }
+    public Func<Task>? OnUpsert { get; init; }
     public IReadOnlyList<IReadOnlyList<VectorSearchHit>>? Rankings { get; init; }
 
     public Task<IReadOnlyList<VectorSearchHit>> SearchAsync(
@@ -238,7 +331,7 @@ internal sealed class TestVectors : IVectorStore
     }
 
     public Task UpsertAsync(IReadOnlyList<VectorDocument> documents, CancellationToken ct) =>
-        Task.CompletedTask;
+        OnUpsert?.Invoke() ?? Task.CompletedTask;
 
     public Task DeleteDocumentAsync(Guid documentId, CancellationToken ct) => Task.CompletedTask;
 }
@@ -296,7 +389,11 @@ internal sealed class TestKnowledgeStore : IKnowledgeDocumentStore
             documents
                 .Where(x =>
                     ReturnUnscopedGraph
-                    || (x.ProductId == productId && x.Status == DocumentIngestionStatus.Completed)
+                    || (
+                        x.ProductId == productId
+                        && x.Status == DocumentIngestionStatus.Completed
+                        && x.SupersededByDocumentId == null
+                    )
                 )
                 .SelectMany(x => x.Chunks)
                 .OrderByDescending(x => seedChunkIds.Contains(x.Id))
@@ -307,7 +404,11 @@ internal sealed class TestKnowledgeStore : IKnowledgeDocumentStore
         );
     }
 
-    public Task AddAsync(KnowledgeDocument document, CancellationToken ct) => Task.CompletedTask;
+    public Task AddAsync(KnowledgeDocument document, CancellationToken ct)
+    {
+        documents.Add(document);
+        return Task.CompletedTask;
+    }
 
     public Task AddChunksAsync(IEnumerable<DocumentChunk> chunks, CancellationToken ct) =>
         Task.CompletedTask;
@@ -319,6 +420,32 @@ internal sealed class TestKnowledgeStore : IKnowledgeDocumentStore
         Task.FromResult<IReadOnlyList<KnowledgeDocument>>(
             documents.Where(x => x.ProductId == productId).ToArray()
         );
+
+    public Task<IReadOnlyList<DocumentChunk>> SearchLexicalChunksAsync(
+        Guid? productId,
+        IReadOnlyList<string> terms,
+        int limit,
+        CancellationToken ct
+    )
+    {
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult<IReadOnlyList<DocumentChunk>>(
+            documents
+                .Where(d =>
+                    d.Status == DocumentIngestionStatus.Completed
+                    && d.SupersededByDocumentId == null
+                    && (productId == null || d.ProductId == productId)
+                )
+                .SelectMany(d => d.Chunks)
+                .Where(c => terms.Any(t => c.Text.Contains(t, StringComparison.OrdinalIgnoreCase)))
+                .OrderByDescending(c =>
+                    terms.Count(t => c.Text.Contains(t, StringComparison.OrdinalIgnoreCase))
+                )
+                .ThenBy(c => c.Id)
+                .Take(limit)
+                .ToArray()
+        );
+    }
 
     public Task<bool> ExistsByHashAsync(Guid productId, string sha256, CancellationToken ct) =>
         Task.FromResult(false);

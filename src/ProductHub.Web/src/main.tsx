@@ -1,13 +1,16 @@
-import React, { useEffect, useMemo, useState } from "react";
+import { ConfirmationProvider, useConfirmation } from "@/components/confirmation-provider";
+import { useGenerationJobs, jobIsActive } from "@/hooks/use-generation-jobs";
+import { KnowledgeDocuments, documentIsReady, type KnowledgeDocumentView } from "@/components/knowledge-documents";
+import { GenerationPresets } from "@/components/generation-presets";
+import { GenerationAudit } from "@/components/generation-audit";
+import { GenerationProgress } from "@/components/generation-progress";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { ColumnDef } from "@tanstack/react-table";
 import {
   Check,
   CircleCheckBig,
   CircleX,
-  ChevronDown,
-  History,
-  Menu,
   Pencil,
   Pin,
   Sparkles,
@@ -19,11 +22,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
 import { NativeSelect } from "@/components/ui/native-select";
 import {
   Dialog,
@@ -75,6 +73,7 @@ type Product = {
   rowVersion: string;
 };
 type Draft = {
+  review?: import("@/components/evidence-review").ClaimReviewReport | null;
   id: string;
   productId: string;
   language: string;
@@ -108,10 +107,10 @@ type Generation = {
   retrievalDurationMs?: number;
   retrievedChunkCount: number;
   retrievedDocumentCount: number;
-  retrievalSources: { documentId: string; fileName: string; citation: string; score: number; graphHops?: number | null; graphPath?: string[] | null }[];
+  retrievalSources: { documentId: string; fileName: string; citation: string; score: number; graphHops?: number | null; graphPath?: string[] | null; documentRevision?: string | null; chunkRevision?: string | null; retrievalVersion?: string | null; denseCandidateCount?: number; lexicalCandidateCount?: number; graphRevision?: string | null; graphCacheHit?: boolean | null; graphConcepts?: string[] | null }[];
   retrievalErrorCode?: string;
 };
-type KnowledgeDocument = {
+type KnowledgeDocument = KnowledgeDocumentView & {
   id: string;
   productId: string;
   fileName: string;
@@ -124,22 +123,6 @@ type DraftHistoryRow = {
   title: string;
   createdAt: string;
   status: string;
-};
-type ModelAuditRow = {
-  draft: Draft;
-  version: string;
-  run?: Generation;
-  startedAt: string;
-  model: string;
-  promptVersion: string;
-  latencyMs: number;
-  tokens: number;
-  runStatus: string;
-  trace: string;
-  grounding: string;
-  facts: string;
-  topK: string;
-  evidence: string;
 };
 type DraftForm = {
   title: string;
@@ -213,20 +196,21 @@ const formatAttributes = (attributes: Attribute[]) =>
     .join("\n");
 
 function App() {
+  const confirm = useConfirmation();
   const [currentUser, setCurrentUser] = useState<
     CurrentUser | null | undefined
   >(undefined);
   const [catalogs, setCatalogs] = useState<Catalog[]>([]);
-  const [catalogId, setCatalogId] = useState("");
+  const [catalogId, setCatalogId] = useState(() => new URLSearchParams(location.search).get("catalog") ?? "");
   const [products, setProducts] = useState<Product[]>([]);
-  const [selectedId, setSelectedId] = useState("");
+  const [selectedId, setSelectedId] = useState(() => new URLSearchParams(location.search).get("product") ?? "");
   const [drafts, setDrafts] = useState<Draft[]>([]);
   const [draftId, setDraftId] = useState("");
+  const [draftTab, setDraftTab] = useState("history");
   const [generations, setGenerations] = useState<Record<string, Generation>>({});
-  const [language, setLanguage] = useState<"de" | "en">("de");
-  const [query, setQuery] = useState("");
+  const [language, setLanguage] = useState<"de" | "en">(() => new URLSearchParams(location.search).get("language") === "en" ? "en" : "de");
   const [busy, setBusy] = useState(false);
-  const [generating, setGenerating] = useState(false);
+
   const [loadingCatalogs, setLoadingCatalogs] = useState(false);
   const [loadingProducts, setLoadingProducts] = useState(false);
   const [loadingDrafts, setLoadingDrafts] = useState(false);
@@ -238,9 +222,8 @@ function App() {
   const [topK, setTopK] = useState(5);
   const [model, setModel] = useState<(typeof AI_MODELS)[number]>(AI_MODELS[0]);
   const [knowledgeDocuments, setKnowledgeDocuments] = useState<KnowledgeDocument[]>([]);
-  const hasReadyKnowledge = knowledgeDocuments.some((document) => document.status === 1 || String(document.status).toLowerCase() === "completed");
+  const hasReadyKnowledge = knowledgeDocuments.some(documentIsReady);
   const [knowledgeFile, setKnowledgeFile] = useState<File | null>(null);
-  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [editingDraft, setEditingDraft] = useState(false);
   const [draftForm, setDraftForm] = useState<DraftForm>({
     title: "",
@@ -264,20 +247,37 @@ function App() {
   const activeCatalog = catalogs.find((x) => x.id === catalogId);
   const selected = products.find((p) => p.id === selectedId);
   const languageDrafts = useMemo(
-    () => drafts.filter((d) => d.language.toLowerCase() === language),
-    [drafts, language],
+    () => drafts.filter((d) => d.productId === selectedId && d.language.toLowerCase() === language),
+    [drafts, language, selectedId],
   );
   const draft =
     languageDrafts.find((d) => d.id === draftId) ?? languageDrafts[0];
-  const filteredProducts = useMemo(() => {
-    const term = query.trim().toLowerCase();
-    return term
-      ? products.filter((p) =>
-          `${p.name} ${p.sku} ${p.brand}`.toLowerCase().includes(term),
-        )
-      : products;
-  }, [products, query]);
-
+  const dirty = Boolean(editingDraft && draft && (draftForm.title !== draft.title || draftForm.shortDescription !== draft.shortDescription || draftForm.longDescription !== draft.longDescription || draftForm.highlights !== draft.highlights.join("\n")));
+  const canLeaveDraft = async () => !dirty || await confirm({ title: "Discard unsaved changes?", description: "Your edits to this draft have not been saved. Discard them to continue, or keep editing.", actionLabel: "Discard changes", cancelLabel: "Keep editing", destructive: true });
+  const navigate = async (action: () => void) => { if (await canLeaveDraft()) { setEditingDraft(false); action(); } };
+  useEffect(() => {
+    if (!dirty) return;
+    const protect = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
+    window.addEventListener("beforeunload", protect);
+    return () => window.removeEventListener("beforeunload", protect);
+  }, [dirty]);
+  useEffect(() => {
+    const url = new URL(location.href);
+    for (const [key, value] of [["catalog", catalogId], ["product", selectedId], ["language", language]]) {
+      if (value) url.searchParams.set(key, value); else url.searchParams.delete(key);
+    }
+    history.replaceState(null, "", url);
+  }, [catalogId, selectedId, language]);
+  useEffect(() => {
+    if (currentUser?.role !== "Admin" || !selectedId || !catalogId || products.some(product => product.id === selectedId)) return;
+    let disposed = false;
+    request<Product>(`/api/products/${encodeURIComponent(selectedId)}`).then(product => {
+      if (disposed) return;
+      if (product.catalogId !== catalogId) { setSelectedId(""); setError("This product is not in the selected catalog."); return; }
+      setProducts(items => [product, ...items.filter(item => item.id !== product.id)]);
+    }).catch(error => { if (!disposed) { setSelectedId(""); setError((error as Error).message); } });
+    return () => { disposed = true; };
+  }, [selectedId, catalogId, currentUser?.role, products]);
   const loadCatalogs = async () => {
     setLoadingCatalogs(true);
     try {
@@ -295,15 +295,17 @@ function App() {
         `/api/products?page=1&pageSize=100${forCatalog ? `&catalogId=${forCatalog}` : ""}`,
       );
       setProducts(data.items);
-      setSelectedId((id) => data.items.some((product) => product.id === id) ? id : "");
     } finally {
       setLoadingProducts(false);
     }
   };
+  const draftRequest = useRef(0);
   const loadDrafts = async (productId: string) => {
+    const requestId = ++draftRequest.current;
     setLoadingDrafts(true);
     try {
       const data = await request<Draft[]>(`/api/products/${productId}/drafts`);
+      if (requestId !== draftRequest.current) return;
       setDrafts(data);
       setGenerations({});
       setDraftId((id) => data.some((x) => x.id === id) ? id : (data[0]?.id ?? ""));
@@ -311,9 +313,10 @@ function App() {
         const run = await request<Generation>(`/api/drafts/${item.id}/generation`);
         return [item.id, run] as const;
       }));
+      if (requestId !== draftRequest.current) return;
       setGenerations(Object.fromEntries(metadata.filter((result): result is PromiseFulfilledResult<readonly [string, Generation]> => result.status === "fulfilled").map((result) => result.value)));
     } finally {
-      setLoadingDrafts(false);
+      if (requestId === draftRequest.current) setLoadingDrafts(false);
     }
   };
   useEffect(() => {
@@ -334,11 +337,23 @@ function App() {
       loadDrafts(selectedId).catch((e) => setError(e.message));
   }, [selectedId, currentUser?.role]);
   useEffect(() => {
-    setDraftId(languageDrafts[0]?.id ?? "");
+    setDraftId(id => drafts.some(draft => draft.id === id && draft.productId === selectedId && draft.language.toLowerCase() === language) ? id : "");
     setEditingDraft(false);
-  }, [languageDrafts, selectedId]);
+  }, [language, selectedId]);
   useEffect(() => setEditingDraft(false), [draft?.id]);
 
+  const workspaceRef = useRef({ productId: selectedId, editing: editingDraft });
+  useEffect(() => { workspaceRef.current = { productId: selectedId, editing: editingDraft }; }, [selectedId, editingDraft]);
+  const { jobs, connectionError: jobConnectionError, enqueue, cancel: cancelJob } = useGenerationJobs(API, currentUser?.role === "Admin" ? selectedId : "", (job) => {
+    if (workspaceRef.current.productId === job.productId) {
+      void loadDrafts(job.productId).then(() => {
+        const current = workspaceRef.current;
+        if (job.draftId && !current.editing && current.productId === job.productId) setDraftId(job.draftId);
+      }).catch(error => toast.error((error as Error).message));
+    }
+    toast.success("Draft generated and ready for review");
+  });
+  const generating = jobs.some(jobIsActive);
   const loadKnowledgeDocuments = async (productId: string) => {
     setKnowledgeDocuments(
       await request<KnowledgeDocument[]>(`/api/products/${productId}/documents`),
@@ -381,8 +396,8 @@ function App() {
       setBusy(false);
     }
   };
-  const deleteKnowledge = async (document: KnowledgeDocument) => {
-    if (!selected || !window.confirm(`Remove ${document.fileName} from this product's knowledge?`))
+  const deleteKnowledge = async (document: KnowledgeDocumentView) => {
+    if (!selected || !await confirm({ title: "Remove knowledge source?", description: `Remove ${document.fileName} from this product’s knowledge? Existing draft evidence snapshots will be retained.`, actionLabel: "Remove source", destructive: true }))
       return;
     setBusy(true);
     setError("");
@@ -400,41 +415,36 @@ function App() {
       setBusy(false);
     }
   };
-  const generate = async () => {
+  const supersedeKnowledge = async (documentId: string, replacementDocumentId: string) => {
     if (!selected) return;
-    setBusy(true);
-    setGenerating(true);
-    setError("");
-    setDialog(null);
+    setBusy(true); setError("");
     try {
-      const created = await request<Draft>(
-        `/api/products/${selected.id}/drafts/generate`,
-        {
-          method: "POST",
-          headers: { "Idempotency-Key": crypto.randomUUID() },
-          body: JSON.stringify({ language, retrievalMode, includeFacts, topK, model }),
-        },
-      );
-      await loadDrafts(selected.id);
-      setDraftId(created.id);
+      await request(`/api/products/${selected.id}/documents/${documentId}/supersede`, { method: "POST", body: JSON.stringify({ replacementDocumentId }) });
+      await loadKnowledgeDocuments(selected.id);
+      toast.success("Old source superseded; future retrieval uses active revisions");
+    } catch (error) { setError((error as Error).message); }
+    finally { setBusy(false); }
+  };
+  const generate = async () => {
+    if (!selected || generating) return;
+    setBusy(true); setError("");
+    try {
+      await enqueue({ language, retrievalMode, includeFacts, topK, model });
       setDialog(null);
-      toast.success("Draft generated");
-    } catch (e) {
-      setError((e as Error).message);
-      toast.error("Draft generation failed");
-    } finally {
-      setBusy(false);
-      setGenerating(false);
-    }
+      toast.success("Generation queued");
+    } catch (error) { setError((error as Error).message); toast.error("Could not queue generation"); }
+    finally { setBusy(false); }
   };
   const review = async (action: "approve" | "reject") => {
     if (!draft) return;
+    const acknowledgeWarnings = action === "approve" && Boolean((draft.review?.requiresAcknowledgement ?? draft.review?.claims.some(claim => claim.status !== "Supported")));
+    if (acknowledgeWarnings && !await confirm({ title: "Approve flagged draft?", description: `“${draft.title}” contains claims that need review. By approving, you acknowledge that you inspected the saved evidence and accept this version.`, actionLabel: "Acknowledge & approve", cancelLabel: "Keep reviewing" })) return;
     setBusy(true);
     setError("");
     try {
       const updated = await request<Draft>(
         `/api/drafts/${draft.id}/${action}`,
-        { method: "POST" },
+        { method: "POST", body: action === "approve" ? JSON.stringify({ acknowledgeWarnings }) : undefined },
       );
       setDrafts((items) =>
         items.map((x) =>
@@ -486,6 +496,10 @@ function App() {
     clearSelection: () => void,
   ) => {
     if (draftsToReview.length === 0) return;
+    if (action === "approve" && draftsToReview.some(item => (item.review?.requiresAcknowledgement ?? item.review?.claims.some(claim => claim.status !== "Supported")))) {
+      toast.error("Open drafts with claim warnings and approve them individually after inspecting the evidence.");
+      return;
+    }
     setBusy(true);
     setError("");
     try {
@@ -714,65 +728,13 @@ function App() {
       cell: ({ row }) => {
         const item = row.original.draft;
         const isSelected = item.id === draft?.id;
-        return <Button size="sm" variant={isSelected ? "secondary" : "ghost"} disabled={isSelected} onClick={() => setDraftId(item.id)}>{isSelected ? "Viewing" : "View"}</Button>;
-      },
-    },
-  ];
-  const modelAuditData: ModelAuditRow[] = languageDrafts.map((item, index) => {
-    const run = generations[item.id];
-    return {
-      draft: item,
-      version: index === 0 ? "Latest" : `Version ${languageDrafts.length - index}`,
-      run,
-      startedAt: run?.startedAt ?? "",
-      model: run ? `${run.provider} · ${run.model}` : "",
-      promptVersion: run?.promptVersion ?? "",
-      latencyMs: run?.durationMs ?? 0,
-      tokens: (run?.inputTokens ?? 0) + (run?.outputTokens ?? 0),
-      runStatus: run?.status ?? "Loading",
-      trace: run?.correlationId ?? "",
-      grounding: !run ? "—" : (run.retrievalMode === "Graph" || run.groundingMode === "GraphRag") ? "Graph RAG" : (run.retrievalMode === "Advanced" || run.groundingMode === "AdvancedRag") ? "Advanced RAG" : (run.retrievalMode === "Naive" || run.groundingMode === "Rag") ? "Naive RAG" : "No RAG",
-      facts: !run ? "—" : run.includeFacts === false ? "Excluded" : "Included",
-      topK: (run?.groundingMode === "Rag" || run?.groundingMode === "AdvancedRag" || run?.groundingMode === "GraphRag")
-        ? `${run.requestedTopK ?? "—"} requested → ${run.retrievedChunkCount} returned`
-        : "—",
-      evidence: (run?.groundingMode === "Rag" || run?.groundingMode === "AdvancedRag" || run?.groundingMode === "GraphRag")
-        ? run.retrievalStatus === "Succeeded"
-          ? `${run.retrievedChunkCount} chunks · ${run.retrievedDocumentCount} docs`
-              + (run.retrievalSources?.length
-                ? ` · ${[...new Set(run.retrievalSources.map((source) => source.fileName))].join(", ")}`
-                : "")
-          : run.retrievalErrorCode ?? run.retrievalStatus
-        : "Not requested",
-    };
-  });
-  const modelAuditColumns: ColumnDef<ModelAuditRow>[] = [
-    { accessorKey: "version", header: "Draft", meta: { label: "Draft" } },
-    { id: "runId", header: "Run ID", meta: { label: "Run ID" }, accessorFn: (row) => row.run?.id ?? "", cell: ({ row }) => <code>{row.original.run?.id.slice(0, 8) ?? "—"}</code> },
-    { accessorKey: "startedAt", header: "Started", meta: { label: "Started" }, cell: ({ row }) => row.original.startedAt ? new Date(row.original.startedAt).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : "Loading…" },
-    { accessorKey: "model", header: "Model", meta: { label: "Model" }, cell: ({ row }) => row.original.model || "—" },
-    { accessorKey: "promptVersion", header: "Prompt", meta: { label: "Prompt" }, cell: ({ row }) => row.original.promptVersion || "—" },
-    { accessorKey: "grounding", header: "Grounding", meta: { label: "Grounding" }, cell: ({ row }) => <Badge variant={row.original.grounding !== "No RAG" && row.original.grounding !== "—" ? "default" : "outline"}>{row.original.grounding}</Badge> },
-    { accessorKey: "facts", header: "Product facts", meta: { label: "Product facts" } },
-    { accessorKey: "topK", header: "Top-K", meta: { label: "Top-K" } },
-    { accessorKey: "evidence", header: "Evidence", meta: { label: "Evidence" }, cell: ({ row }) => {
-      const run = row.original.run;
-      return <div><span title={run?.retrievalSources?.map((x) => `${x.citation} (${x.score.toFixed(3)})`).join("\n")}>{row.original.evidence}</span>{run?.retrievalSources?.some((source) => source.graphHops != null) && <details className="mt-1 max-w-xs whitespace-normal"><summary className="cursor-pointer text-xs text-primary">Graph paths</summary><ul className="mt-2 grid gap-2">{run.retrievalSources.map((source, index) => <li className="rounded-md border bg-muted/30 p-2 text-xs" key={`${source.documentId}-${index}`}><strong>{source.citation} · {source.graphHops ?? 0} hops</strong><p className="mt-1 break-words text-muted-foreground">{source.graphPath?.join(" → ")}</p></li>)}</ul></details>}</div>;
-    } },
-    { accessorKey: "latencyMs", header: "Latency", meta: { label: "Latency" }, cell: ({ row }) => row.original.latencyMs ? `${(row.original.latencyMs / 1000).toFixed(1)}s` : "—" },
-    { accessorKey: "tokens", header: "Tokens", meta: { label: "Tokens" }, cell: ({ row }) => row.original.tokens || "—" },
-    { accessorKey: "runStatus", header: "Run status", meta: { label: "Run status" }, cell: ({ row }) => row.original.run ? <Badge variant={row.original.runStatus === "Succeeded" ? "secondary" : row.original.runStatus === "Failed" ? "destructive" : "outline"}>{row.original.runStatus}</Badge> : "—" },
-    { accessorKey: "trace", header: "Trace", meta: { label: "Trace" }, cell: ({ row }) => <code>{row.original.trace.slice(0, 12) || "—"}</code> },
-    {
-      id: "action", header: "Draft", meta: { label: "Draft action" }, enableSorting: false,
-      cell: ({ row }) => {
-        const item = row.original.draft;
-        const isSelected = item.id === draft?.id;
-        return <Button size="sm" variant={isSelected ? "secondary" : "ghost"} disabled={isSelected} onClick={() => setDraftId(item.id)}>{isSelected ? "Viewing" : "View"}</Button>;
+        return <Button size="sm" variant={isSelected ? "secondary" : "ghost"} disabled={isSelected} onClick={() => navigate(() => setDraftId(item.id))}>{isSelected ? "Viewing" : "View"}</Button>;
       },
     },
   ];
   const logout = async () => {
+    if (!await canLeaveDraft()) return;
+    setEditingDraft(false);
     await fetch(`${API}/api/auth/logout`, {
       method: "POST",
       credentials: "include",
@@ -789,7 +751,7 @@ function App() {
     return <AppShell user={currentUser} onNavigate={() => setCatalogId("")} onLogout={logout}>
       <div className="admin-surface">
         {error && <Alert className="m-6 border-destructive/40 text-destructive"><AlertDescription>{error}</AlertDescription></Alert>}
-        <CatalogOverview catalogs={catalogs} loading={loadingCatalogs} onCreate={() => setDialog("catalog")} onOpen={(id) => { setSelectedId(""); setQuery(""); setCatalogId(id); }} />
+        <CatalogOverview catalogs={catalogs} loading={loadingCatalogs} onCreate={() => setDialog("catalog")} onOpen={(id) => { setSelectedId(""); setCatalogId(id); }} />
         <Dialog open={dialog === "catalog"} onOpenChange={(open) => !open && !busy && setDialog(null)}>
           <DialogContent>
             <form className="grid gap-5" onSubmit={createCatalog}>
@@ -805,26 +767,29 @@ function App() {
     </AppShell>;
 
   if (!selectedId && activeCatalog)
-    return <AppShell user={currentUser} onNavigate={() => { setCatalogId(""); setSelectedId(""); }} onLogout={logout}>
+    return <AppShell user={currentUser} onNavigate={() => navigate(() => { setCatalogId(""); setSelectedId(""); })} onLogout={logout}>
       <div className="admin-surface">
         {error && <Alert className="m-6 border-destructive/40 text-destructive"><AlertDescription>{error}</AlertDescription></Alert>}
-        <CatalogDetail catalog={activeCatalog} products={products} loading={loadingProducts} query={query} onQueryChange={setQuery} onBack={() => setCatalogId("")} onOpenProduct={setSelectedId} onAddProduct={() => setDialog("product")} />
+        <CatalogDetail key={`${currentUser.id}:${activeCatalog.id}`} api={API} userId={currentUser.id} catalog={activeCatalog} refreshKey={products.map(product => `${product.id}:${product.updatedAt}`).join("|")} onBack={() => setCatalogId("")} onOpenProduct={(product, reviewLanguage) => { setProducts(items => [product, ...items.filter(item => item.id !== product.id)]); setLanguage(reviewLanguage); setSelectedId(product.id); }} onAddProduct={() => setDialog("product")} />
         <ProductSheet open={dialog === "product"} catalogName={activeCatalog.name} form={productForm} busy={busy} error={error} addAnother={addAnotherProduct} onOpenChange={(open) => { if (!open && !busy) setDialog(null); }} onFormChange={setProductForm} onAddAnotherChange={setAddAnotherProduct} onSubmit={createProduct} />
       </div>
     </AppShell>;
 
   if (selected && activeCatalog)
-    return <AppShell user={currentUser} onNavigate={() => { setCatalogId(""); setSelectedId(""); }} onLogout={logout}>
+    return <AppShell user={currentUser} onNavigate={() => navigate(() => { setCatalogId(""); setSelectedId(""); })} onLogout={logout}>
       <div className="admin-surface">
         <ProductDetail
+          dirty={dirty}
+          draftAudits={generations}
+          progress={<GenerationProgress onOpenAudit={() => setDraftTab("audit")} jobs={jobs} error={jobConnectionError} onCancel={(id) => { void cancelJob(id).catch(error => toast.error((error as Error).message)); }} />}
           product={selected}
           catalogName={activeCatalog.name}
           language={language}
-          drafts={drafts}
+          drafts={drafts.filter(item => item.productId === selected.id)}
           languageDrafts={languageDrafts}
           draft={draft}
           draftTables={
-            <Tabs defaultValue="history" className="mt-4">
+            <Tabs value={draftTab} onValueChange={setDraftTab} className="mt-4">
               <TabsList>
                 <TabsTrigger value="history">Draft history <Badge variant="secondary">{languageDrafts.length}</Badge></TabsTrigger>
                 <TabsTrigger value="audit">Model audit</TabsTrigger>
@@ -833,7 +798,7 @@ function App() {
                 <DataTable columns={draftHistoryColumns} data={draftHistoryData} getRowId={(row) => row.draft.id} renderSelectedActions={renderDraftSelectionActions} searchPlaceholder="Filter draft history…" emptyMessage="No draft versions found." />
               </TabsContent>
               <TabsContent value="audit" className="mt-3">
-                <DataTable columns={modelAuditColumns} data={modelAuditData} getRowId={(row) => row.draft.id} enableRowSelection={false} searchPlaceholder="Filter model runs…" emptyMessage="No model runs found." />
+                <GenerationAudit key={selected.id} api={API} productId={selected.id} refreshKey={jobs.map(job => `${job.id}:${job.status}:${job.stage}`).join("|")} selectedDraftId={draft?.id} onViewDraft={(id, targetLanguage) => navigate(() => { setLanguage(targetLanguage === "en" ? "en" : "de"); setDraftId(id); })} />
               </TabsContent>
             </Tabs>
           }
@@ -843,664 +808,27 @@ function App() {
           loading={loadingDrafts}
           busy={busy}
           error={error}
-          onBack={() => setSelectedId("")}
-          onLanguageChange={setLanguage}
+          onBack={() => navigate(() => setSelectedId(""))}
+          onLanguageChange={value => navigate(() => setLanguage(value))}
           onEditFacts={openSourceFacts}
           onNewDraft={openGenerate}
           onEditDraft={beginEditDraft}
-          onCancelEdit={() => setEditingDraft(false)}
+          onCancelEdit={() => navigate(() => setEditingDraft(false))}
           onFormChange={setDraftForm}
           onSaveDraft={saveDraft}
           onReview={review}
         />
         <Dialog open={dialog === "facts"} onOpenChange={(open) => !open && !busy && setDialog(null)}><DialogContent><form className="grid gap-5" onSubmit={updateSourceFacts}><DialogHeader><DialogTitle>Edit source facts</DialogTitle><DialogDescription>Maintain the verified specifications used for generation.</DialogDescription></DialogHeader><div className="grid gap-4 sm:grid-cols-2"><Label className="grid gap-2">Product name<Input required value={sourceFactsForm.name} onChange={(event) => setSourceFactsForm((value) => ({ ...value, name: event.target.value }))} /></Label><Label className="grid gap-2">Brand<Input required value={sourceFactsForm.brand} onChange={(event) => setSourceFactsForm((value) => ({ ...value, brand: event.target.value }))} /></Label></div><Label className="grid gap-2">Source facts <small className="font-normal text-muted-foreground">one per line: Name: Value | Unit</small><Textarea rows={10} value={sourceFactsForm.attributes} onChange={(event) => setSourceFactsForm((value) => ({ ...value, attributes: event.target.value }))} /></Label>{error && <Alert className="border-destructive/40 text-destructive"><AlertDescription>{error}</AlertDescription></Alert>}<DialogFooter><Button type="button" variant="outline" onClick={() => setDialog(null)}>Cancel</Button><Button disabled={busy}>{busy ? "Saving…" : "Save source facts"}</Button></DialogFooter></form></DialogContent></Dialog>
-        <Dialog open={dialog === "generate"} onOpenChange={(open) => !open && !busy && setDialog(null)}><DialogContent className="max-h-[calc(100dvh-2rem)] max-w-2xl overflow-y-auto"><div className="grid gap-5"><DialogHeader><DialogTitle>New {language === "de" ? "German" : "English"} draft</DialogTitle><DialogDescription>Choose the model and grounding source for this generation.</DialogDescription></DialogHeader><Label className="grid gap-2">Model<NativeSelect className="w-full" value={model} onChange={(event) => setModel(event.target.value as (typeof AI_MODELS)[number])}>{AI_MODELS.map((item) => <option key={item} value={item}>{item}</option>)}</NativeSelect></Label><GenerationSettings includeFacts={includeFacts} onIncludeFactsChange={setIncludeFacts} retrievalMode={retrievalMode} onRetrievalModeChange={setRetrievalMode} topK={topK} onTopKChange={setTopK} hasKnowledge={hasReadyKnowledge} disabled={busy} /><div className="grid gap-3 rounded-md border p-4"><div className="flex items-center justify-between"><strong>Product knowledge</strong><Badge variant="outline">{knowledgeDocuments.length} documents</Badge></div>{knowledgeDocuments.map((document) => <div className="flex min-h-11 items-center gap-3 rounded-md bg-muted p-2" key={document.id}><span className="min-w-0 flex-1 truncate text-sm">{document.fileName}<small className="ml-2 text-muted-foreground">{document.status === 1 || String(document.status).toLowerCase() === "completed" ? "Ready" : document.status === 2 || String(document.status).toLowerCase() === "failed" ? "Failed" : "Indexing"}</small></span><Button type="button" size="icon" variant="ghost" aria-label={`Remove ${document.fileName}`} onClick={() => deleteKnowledge(document)}><Trash2 /></Button></div>)}<Label className="grid gap-2">Upload instructions<Input type="file" accept=".txt,.md,.pdf" onChange={(event) => setKnowledgeFile(event.target.files?.[0] ?? null)} /></Label><Button type="button" variant="outline" disabled={busy || !knowledgeFile} onClick={uploadKnowledge}><Upload />Upload and index</Button></div>{error && <Alert className="border-destructive/40 text-destructive"><AlertDescription>{error}</AlertDescription></Alert>}<DialogFooter><Button type="button" variant="outline" onClick={() => setDialog(null)}>Cancel</Button><Button type="button" disabled={busy || (useRag && !hasReadyKnowledge)} onClick={generate}><Sparkles />Generate draft</Button></DialogFooter></div></DialogContent></Dialog>
+        <Dialog open={dialog === "generate"} onOpenChange={(open) => !open && !busy && setDialog(null)}><DialogContent className="max-h-[calc(100dvh-2rem)] max-w-2xl overflow-y-auto"><div className="grid gap-5"><DialogHeader><DialogTitle>New {language === "de" ? "German" : "English"} draft</DialogTitle><DialogDescription>Choose the model and grounding source for this generation.</DialogDescription></DialogHeader><Label className="grid gap-2">Model<NativeSelect className="w-full" value={model} onChange={(event) => setModel(event.target.value as (typeof AI_MODELS)[number])}>{AI_MODELS.map((item) => <option key={item} value={item}>{item}</option>)}</NativeSelect></Label><GenerationPresets userId={currentUser.id} settings={{ model, retrievalMode, includeFacts, topK }} onApply={value => { if (AI_MODELS.includes(value.model as (typeof AI_MODELS)[number])) setModel(value.model as (typeof AI_MODELS)[number]); setRetrievalMode(value.retrievalMode); setIncludeFacts(value.includeFacts); setTopK(value.topK); }} /><GenerationSettings includeFacts={includeFacts} onIncludeFactsChange={setIncludeFacts} retrievalMode={retrievalMode} onRetrievalModeChange={setRetrievalMode} topK={topK} onTopKChange={setTopK} hasKnowledge={hasReadyKnowledge} disabled={busy} /><div className="grid gap-3 rounded-md border p-4"><div className="flex items-center justify-between"><strong>Product knowledge</strong><Badge variant="outline">{knowledgeDocuments.length} documents</Badge></div><KnowledgeDocuments documents={knowledgeDocuments} busy={busy} onRemove={deleteKnowledge} onSupersede={supersedeKnowledge} /><Label className="grid gap-2">Upload instructions<Input type="file" accept=".txt,.md,.pdf" onChange={(event) => setKnowledgeFile(event.target.files?.[0] ?? null)} /></Label><Button type="button" variant="outline" disabled={busy || !knowledgeFile} onClick={uploadKnowledge}><Upload />Upload and index</Button></div>{error && <Alert className="border-destructive/40 text-destructive"><AlertDescription>{error}</AlertDescription></Alert>}<DialogFooter><Button type="button" variant="outline" onClick={() => setDialog(null)}>Cancel</Button><Button type="button" disabled={busy || (useRag && !hasReadyKnowledge)} onClick={generate}><Sparkles />Generate draft</Button></DialogFooter></div></DialogContent></Dialog>
       </div>
     </AppShell>;
 
-  return (
-    <div className="app-shell dashboard-shell">
-      <header className="dashboard-header">
-        <Button
-          variant="ghost"
-          size="icon"
-          className="sidebar-trigger"
-          aria-label={sidebarOpen ? "Close navigation" : "Open navigation"}
-          onClick={() => setSidebarOpen((open) => !open)}
-        >
-          {sidebarOpen ? <X /> : <Menu />}
-        </Button>
-        <div className="brand-mark">PI</div>
-        <div>
-          <p className="eyebrow">PIM workspace</p>
-          <h1>Product Content Operations</h1>
-        </div>
-        <div className="account-menu">
-          <span>
-            <strong>{currentUser.displayName}</strong>
-            <small>{currentUser.email}</small>
-          </span>
-          <Button variant="outline" size="sm" onClick={logout}>
-            Sign out
-          </Button>
-        </div>
-      </header>
-      <main className="dashboard-layout">
-        {sidebarOpen && (
-          <button
-            className="dashboard-overlay"
-            aria-label="Close navigation"
-            onClick={() => setSidebarOpen(false)}
-          />
-        )}
-        <aside
-          className={
-            sidebarOpen ? "product-rail sidebar-open" : "product-rail"
-          }
-        >
-          <div className="rail-title">
-            <span>Catalogs</span>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="add-link"
-              onClick={() => setDialog("catalog")}
-            >
-              + New
-            </Button>
-          </div>
-          <div className="catalog-list">
-            {catalogs.map((catalog) => (
-              <Button
-                variant="ghost"
-                key={catalog.id}
-                className={
-                  catalog.id === catalogId ? "catalog active" : "catalog"
-                }
-                onClick={() => {
-                  setCatalogId(catalog.id);
-                  setSidebarOpen(false);
-                }}
-              >
-                <span>{catalog.name}</span>
-                <strong>{catalog.productCount}</strong>
-                <small>{catalog.description}</small>
-              </Button>
-            ))}
-          </div>
-          {activeCatalog && (
-            <section className="catalog-product-scope">
-              <div className="catalog-scope-head">
-                <div>
-                  <span>Active catalog</span>
-                  <strong>{activeCatalog.name}</strong>
-                </div>
-                <Badge variant="secondary">
-                  {activeCatalog.productCount} products
-                </Badge>
-                <p>{activeCatalog.description}</p>
-              </div>
-              <div className="rail-title products-title">
-                <span>Products in catalog</span>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="add-link"
-                  onClick={() => setDialog("product")}
-                >
-                  + Add
-                </Button>
-              </div>
-              <div className="search">
-                ⌕{" "}
-                <Input
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  placeholder={`Search ${activeCatalog.name}`}
-                  aria-label={`Search products in ${activeCatalog.name}`}
-                />
-              </div>
-              <div className="product-tree">
-                <div className="product-list">
-                  {filteredProducts.map((product) => (
-                    <Button
-                      variant="ghost"
-                      className={
-                        product.id === selectedId ? "product active" : "product"
-                      }
-                      onClick={() => {
-                        setSelectedId(product.id);
-                        setSidebarOpen(false);
-                      }}
-                      key={product.id}
-                    >
-                      <span className="product-avatar">
-                        {product.name.slice(0, 2).toUpperCase()}
-                      </span>
-                      <span>
-                        <strong>{product.name}</strong>
-                        <small>
-                          {product.sku} · {product.brand}
-                        </small>
-                      </span>
-                    </Button>
-                  ))}
-                  {filteredProducts.length === 0 && (
-                    <p className="no-results">No products in this catalog</p>
-                  )}
-                </div>
-              </div>
-            </section>
-          )}
-        </aside>
-        <section className="workspace dashboard-content">
-          {error && (
-            <Alert className="error-banner">
-              <AlertDescription>{error}</AlertDescription>
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label="Dismiss error"
-                onClick={() => setError("")}
-              >
-                ×
-              </Button>
-            </Alert>
-          )}
-          {!selected ? (
-            <div className="empty">
-              <h2>
-                {activeCatalog
-                  ? `${activeCatalog.name} is empty`
-                  : "Create your first catalog"}
-              </h2>
-              <p>
-                {activeCatalog
-                  ? "Add a product with facts that AI can turn into review-ready product information."
-                  : "Catalogs keep related products organized."}
-              </p>
-              {activeCatalog && (
-                <Button
-                  className="empty-action"
-                  onClick={() => setDialog("product")}
-                >
-                  Add product
-                </Button>
-              )}
-            </div>
-          ) : (
-            <>
-              <div className="workspace-head">
-                <div>
-                  <nav className="entity-breadcrumb" aria-label="Product location">
-                    <span>Catalogs</span>
-                    <b>›</b>
-                    <span>{activeCatalog?.name ?? "Uncatalogued"}</span>
-                    <b>›</b>
-                    <strong>{selected.name}</strong>
-                  </nav>
-                  <p className="eyebrow">Product record</p>
-                  <h2>{selected.name}</h2>
-                  <div className="product-record-meta">
-                    <span><small>SKU</small>{selected.sku}</span>
-                    <span><small>Brand</small>{selected.brand}</span>
-                    <span><small>Catalog</small>{activeCatalog?.name ?? "Uncatalogued"}</span>
-                    <span><small>Facts</small>{selected.attributes.length}</span>
-                    <span><small>Updated</small>{new Date(selected.updatedAt).toLocaleDateString()}</span>
-                  </div>
-                </div>
-                <Button type="button" variant="outline" onClick={openSourceFacts}>
-                  <Pencil aria-hidden="true" />
-                  Edit source facts
-                </Button>
-              </div>
-              <div className="draft-toolbar">
-                <div className="draft-toolbar-summary">
-                  <History aria-hidden="true" />
-                  <div>
-                    <strong>Draft history</strong>
-                    <span>
-                      {languageDrafts.length === 0
-                        ? `No ${language === "de" ? "German" : "English"} versions`
-                        : `${languageDrafts.length} ${
-                            language === "de" ? "German" : "English"
-                          } ${
-                            languageDrafts.length === 1 ? "version" : "versions"
-                          }`}
-                    </span>
-                  </div>
-                </div>
-                <div className="draft-toolbar-actions">
-                  <NativeSelect
-                    value={language}
-                    onChange={(e) => setLanguage(e.target.value as "de" | "en")}
-                    aria-label="Draft language"
-                  >
-                    <option value="de">Deutsch</option>
-                    <option value="en">English</option>
-                  </NativeSelect>
-                  <Button onClick={openGenerate} disabled={busy}>
-                    <Sparkles aria-hidden="true" />
-                    {busy ? "Generating…" : "New draft"}
-                  </Button>
-                </div>
-              </div>
-              {!draft ? (
-                <div className="empty draft-empty">
-                  <span>✦</span>
-                  <h3>
-                    No {language === "de" ? "German" : "English"} draft yet
-                  </h3>
-                  <p>
-                    Generate a {language === "de" ? "German" : "English"}{" "}
-                    description. Approval applies only to this language.
-                  </p>
-                </div>
-              ) : (
-                <>
-                  <div className="content-stack">
-                    <Collapsible className="facts-card">
-                      <CollapsibleTrigger asChild>
-                        <Button
-                          variant="ghost"
-                          className="facts-trigger"
-                          type="button"
-                        >
-                          <span>
-                            <strong>Source facts</strong>
-                            <small>Grounding used to generate this draft</small>
-                          </span>
-                          <span className="fact-count">
-                            {selected.attributes.length + 3} facts
-                          </span>
-                          <ChevronDown className="facts-chevron" aria-hidden="true" />
-                        </Button>
-                      </CollapsibleTrigger>
-                      <CollapsibleContent className="facts-content">
-                        <dl>
-                          <dt>Product</dt>
-                          <dd>{selected.name}</dd>
-                          <dt>Brand</dt>
-                          <dd>{selected.brand}</dd>
-                          <dt>SKU</dt>
-                          <dd>{selected.sku}</dd>
-                          {selected.attributes.map((a) => (
-                            <React.Fragment key={a.name}>
-                              <dt>{a.name}</dt>
-                              <dd>
-                                {a.value}
-                                {a.unit ? ` ${a.unit}` : ""}
-                              </dd>
-                            </React.Fragment>
-                          ))}
-                        </dl>
-                        <div className="trust-note">
-                          Only these supplied facts may inform generated content.
-                        </div>
-                      </CollapsibleContent>
-                    </Collapsible>
-                    <Card
-                      className={
-                        editingDraft ? "draft-card editing" : "draft-card"
-                      }
-                    >
-                      <div className="draft-card-header">
-                        <div className="draft-card-heading">
-                          <span>AI draft</span>
-                          <Badge className={statusClass(draft.status)}>
-                            {statusName(draft.status)}
-                          </Badge>
-                          {draft.isCurrent && (
-                            <Badge variant="secondary">Current</Badge>
-                          )}
-                        </div>
-                        {pending && !editingDraft && (
-                          <div className="draft-header-actions">
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              onClick={beginEditDraft}
-                              disabled={busy}
-                            >
-                              <Pencil />
-                              Edit
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => review("reject")}
-                              disabled={busy}
-                            >
-                              <X />
-                              Reject
-                            </Button>
-                            <Button
-                              size="sm"
-                              onClick={() => review("approve")}
-                              disabled={busy}
-                            >
-                              <Check />
-                              Approve
-                            </Button>
-                          </div>
-                        )}
-                      </div>
-                      <p className="language">
-                        {draft.language === "de" ? "German" : "English"} content
-                      </p>
-                      {editingDraft ? (
-                        <div className="draft-editor">
-                          <Label className="form-field">
-                            <span>Title</span>
-                            <Input
-                              maxLength={200}
-                              value={draftForm.title}
-                              onChange={(e) =>
-                                setDraftForm((x) => ({
-                                  ...x,
-                                  title: e.target.value,
-                                }))
-                              }
-                            />
-                          </Label>
-                          <Label className="form-field">
-                            <span>Short description</span>
-                            <Textarea
-                              maxLength={500}
-                              rows={3}
-                              value={draftForm.shortDescription}
-                              onChange={(e) =>
-                                setDraftForm((x) => ({
-                                  ...x,
-                                  shortDescription: e.target.value,
-                                }))
-                              }
-                            />
-                          </Label>
-                          <Label className="form-field">
-                            <span>Long description</span>
-                            <Textarea
-                              maxLength={8000}
-                              rows={7}
-                              value={draftForm.longDescription}
-                              onChange={(e) =>
-                                setDraftForm((x) => ({
-                                  ...x,
-                                  longDescription: e.target.value,
-                                }))
-                              }
-                            />
-                          </Label>
-                          <Label className="form-field">
-                            <span>
-                              Highlights <small>3–5, one per line</small>
-                            </span>
-                            <Textarea
-                              rows={5}
-                              value={draftForm.highlights}
-                              onChange={(e) =>
-                                setDraftForm((x) => ({
-                                  ...x,
-                                  highlights: e.target.value,
-                                }))
-                              }
-                            />
-                          </Label>
-                          <div className="editor-actions">
-                            <Button
-                              variant="outline"
-                              onClick={() => setEditingDraft(false)}
-                              disabled={busy}
-                            >
-                              Cancel
-                            </Button>
-                            <Button onClick={saveDraft} disabled={busy}>
-                              {busy ? "Saving…" : "Save changes"}
-                            </Button>
-                          </div>
-                        </div>
-                      ) : (
-                        <>
-                          <h3>{draft.title}</h3>
-                          <p className="short">{draft.shortDescription}</p>
-                          <p>{draft.longDescription}</p>
-                          <ul>
-                            {draft.highlights.map((x) => (
-                              <li key={x}>{x}</li>
-                            ))}
-                          </ul>
-                        </>
-                      )}
-                    </Card>
-                  </div>
-                  <Tabs defaultValue="history" className="draft-data-tabs">
-                    <TabsList>
-                      <TabsTrigger value="history">
-                        Draft history
-                        <Badge variant="secondary">{languageDrafts.length}</Badge>
-                      </TabsTrigger>
-                      <TabsTrigger value="audit">Model audit</TabsTrigger>
-                    </TabsList>
-                    <TabsContent value="history">
-                      <DataTable
-                        columns={draftHistoryColumns}
-                        data={draftHistoryData}
-                        getRowId={(row) => row.draft.id}
-                        renderSelectedActions={renderDraftSelectionActions}
-                        searchPlaceholder="Filter draft history…"
-                        emptyMessage="No draft versions found."
-                      />
-                    </TabsContent>
-                    <TabsContent value="audit">
-                      <DataTable
-                        columns={modelAuditColumns}
-                        data={modelAuditData}
-                        getRowId={(row) => row.draft.id}
-                        renderSelectedActions={renderDraftSelectionActions}
-                        searchPlaceholder="Filter model runs…"
-                        emptyMessage="No model runs found."
-                      />
-                    </TabsContent>
-                  </Tabs>
-                </>
-              )}
-            </>
-          )}
-        </section>
-      </main>
-      <Dialog
-        open={dialog !== null}
-        onOpenChange={(open) => !open && !busy && setDialog(null)}
-      >
-        <DialogContent className="max-h-[calc(100dvh-2rem)] max-w-2xl overflow-y-auto">
-            {dialog === "catalog" ? (
-              <form className="grid gap-4" onSubmit={createCatalog}>
-                <DialogHeader>
-                  <p className="eyebrow">Organization</p>
-                  <DialogTitle>Create catalog</DialogTitle>
-                  <DialogDescription>
-                    Group related products into a focused collection.
-                  </DialogDescription>
-                </DialogHeader>
-                <Label className="form-field">
-                  <span>Name</span>
-                  <Input
-                    required
-                    maxLength={120}
-                    value={catalogForm.name}
-                    onChange={(e) =>
-                      setCatalogForm((x) => ({ ...x, name: e.target.value }))
-                    }
-                    placeholder="e.g. Outdoor Essentials"
-                  />
-                </Label>
-                <Label className="form-field">
-                  <span>Description</span>
-                  <Textarea
-                    maxLength={500}
-                    value={catalogForm.description}
-                    onChange={(e) =>
-                      setCatalogForm((x) => ({
-                        ...x,
-                        description: e.target.value,
-                      }))
-                    }
-                    placeholder="What belongs in this catalog?"
-                  />
-                </Label>
-                <DialogFooter>
-                  <Button type="button" variant="outline" onClick={() => setDialog(null)} disabled={busy}>
-                    Cancel
-                  </Button>
-                  <Button disabled={busy}>
-                    {busy ? "Creating…" : "Create catalog"}
-                  </Button>
-                </DialogFooter>
-              </form>
-            ) : dialog === "product" ? (
-              <form className="grid gap-4" onSubmit={createProduct}>
-                <DialogHeader>
-                  <p className="eyebrow">{activeCatalog?.name}</p>
-                  <DialogTitle>Add product</DialogTitle>
-                  <DialogDescription>
-                    Add trustworthy facts before generating product content.
-                  </DialogDescription>
-                </DialogHeader>
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <Label className="form-field">
-                    <span>SKU</span>
-                    <Input
-                      required
-                      value={productForm.sku}
-                      onChange={(e) =>
-                        setProductForm((x) => ({ ...x, sku: e.target.value }))
-                      }
-                      placeholder="OUT-BTL-750"
-                    />
-                  </Label>
-                  <Label className="form-field">
-                    <span>Brand</span>
-                    <Input
-                      required
-                      value={productForm.brand}
-                      onChange={(e) =>
-                        setProductForm((x) => ({ ...x, brand: e.target.value }))
-                      }
-                      placeholder="Northwind"
-                    />
-                  </Label>
-                </div>
-                <Label className="form-field">
-                  <span>Product name</span>
-                  <Input
-                    required
-                    value={productForm.name}
-                    onChange={(e) =>
-                      setProductForm((x) => ({ ...x, name: e.target.value }))
-                    }
-                    placeholder="Alpine Steel Bottle"
-                  />
-                </Label>
-                <Label className="form-field">
-                  <span>
-                    Product facts <small>one per line, Name: Value</small>
-                  </span>
-                  <Textarea
-                    rows={5}
-                    value={productForm.attributes}
-                    onChange={(e) =>
-                      setProductForm((x) => ({
-                        ...x,
-                        attributes: e.target.value,
-                      }))
-                    }
-                    placeholder={"Volume: 750 ml\nMaterial: Stainless steel"}
-                  />
-                </Label>
-                <DialogFooter>
-                  <Button type="button" variant="outline" onClick={() => setDialog(null)} disabled={busy}>
-                    Cancel
-                  </Button>
-                  <Button disabled={busy}>
-                    {busy ? "Adding…" : "Add product"}
-                  </Button>
-                </DialogFooter>
-              </form>
-            ) : dialog === "facts" ? (
-              <form className="grid gap-4" onSubmit={updateSourceFacts}>
-                <DialogHeader>
-                  <p className="eyebrow">{selected?.sku}</p>
-                  <DialogTitle>Edit source facts</DialogTitle>
-                  <DialogDescription>
-                    Maintain the verified product data used by facts-only and RAG generation.
-                  </DialogDescription>
-                </DialogHeader>
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <Label className="form-field">
-                    <span>Product name</span>
-                    <Input required maxLength={200} value={sourceFactsForm.name} onChange={(event) => setSourceFactsForm((value) => ({ ...value, name: event.target.value }))} />
-                  </Label>
-                  <Label className="form-field">
-                    <span>Brand</span>
-                    <Input required maxLength={100} value={sourceFactsForm.brand} onChange={(event) => setSourceFactsForm((value) => ({ ...value, brand: event.target.value }))} />
-                  </Label>
-                </div>
-                <Label className="form-field">
-                  <span>Source facts <small>one per line: Name: Value | Unit</small></span>
-                  <Textarea rows={9} value={sourceFactsForm.attributes} onChange={(event) => setSourceFactsForm((value) => ({ ...value, attributes: event.target.value }))} placeholder={"Capacity: 800 | ml\nMaterial: Borosilicate glass\nPower: 150 | W"} />
-                </Label>
-                <p className="text-sm text-muted-foreground">
-                  Add or change a line to update a fact. Remove a line to delete that fact. The unit after <code>|</code> is optional.
-                </p>
-                <DialogFooter>
-                  <Button type="button" variant="outline" onClick={() => setDialog(null)} disabled={busy}>Cancel</Button>
-                  <Button disabled={busy}>{busy ? "Saving…" : "Save source facts"}</Button>
-                </DialogFooter>
-              </form>
-            ) : dialog === "generate" ? (
-              <div className="grid gap-5">
-                <DialogHeader>
-                  <p className="eyebrow">{selected?.sku} · {language.toUpperCase()}</p>
-                  <DialogTitle>Generate product draft</DialogTitle>
-                  <DialogDescription>
-                    Choose whether Ollama uses only verified product facts or also retrieves product-scoped knowledge.
-                  </DialogDescription>
-                </DialogHeader>
-                <GenerationSettings includeFacts={includeFacts} onIncludeFactsChange={setIncludeFacts} retrievalMode={retrievalMode} onRetrievalModeChange={setRetrievalMode} topK={topK} onTopKChange={setTopK} hasKnowledge={hasReadyKnowledge} disabled={busy} />
-                <div className="grid gap-3 rounded-md border bg-card p-4 shadow-sm">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="grid gap-1"><strong>Product knowledge</strong><small className="font-normal text-muted-foreground">{knowledgeDocuments.length} uploaded document{knowledgeDocuments.length === 1 ? "" : "s"}</small></div>
-                    <Badge variant="outline">Product scoped</Badge>
-                  </div>
-                  {knowledgeDocuments.length > 0 && (
-                    <div className="grid max-h-32 gap-2 overflow-y-auto">
-                      {knowledgeDocuments.map((document) => (
-                        <div className="flex items-center gap-3 rounded-md border bg-muted/50 p-2" key={document.id}>
-                          <span className="min-w-0 flex-1 truncate">{document.fileName}</span>
-                          <small className="whitespace-nowrap font-normal text-muted-foreground">{document.chunkCount} chunks</small>
-                          <Button type="button" size="icon" variant="ghost" disabled={busy} aria-label={`Remove ${document.fileName}`} onClick={() => deleteKnowledge(document)}><Trash2 aria-hidden="true" /></Button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  <div className="grid gap-3 border-t pt-3">
-                    <Label className="form-field">
-                      <span>Upload product instructions</span>
-                      <Input type="file" accept=".txt,.md,.pdf" onChange={(event) => setKnowledgeFile(event.target.files?.[0] ?? null)} />
-                    </Label>
-                    <Button type="button" variant="outline" disabled={busy || !knowledgeFile} onClick={uploadKnowledge}><Upload aria-hidden="true" />{busy ? "Processing…" : "Upload and index"}</Button>
-                  </div>
-                </div>
-                <DialogFooter>
-                  <Button type="button" variant="outline" onClick={() => setDialog(null)} disabled={busy}>Cancel</Button>
-                  <Button type="button" disabled={busy || (useRag && !hasReadyKnowledge)} onClick={generate}><Sparkles aria-hidden="true" />{busy ? "Generating…" : useRag ? "Generate with RAG" : "Generate from facts"}</Button>
-                </DialogFooter>
-              </div>
-            ) : null}
-        </DialogContent>
-      </Dialog>
+  return <AppShell user={currentUser} onNavigate={() => navigate(() => { setCatalogId(""); setSelectedId(""); })} onLogout={logout}>
+    <div className="mx-auto grid min-h-64 max-w-xl content-center gap-4 p-6 text-center">
+      {error ? <Alert className="border-destructive/40 text-destructive"><AlertDescription>{error}</AlertDescription></Alert> : <p role="status" aria-live="polite" className="text-sm text-muted-foreground">Loading workspace…</p>}
+      <Button variant="outline" onClick={() => navigate(() => { setCatalogId(""); setSelectedId(""); })}>Back to catalogs</Button>
     </div>
-  );
+  </AppShell>;
 }
 
 function Login({ onLogin }: { onLogin: (user: CurrentUser) => void }) {
@@ -1595,9 +923,9 @@ function Storefront({
   onLogout: () => void;
 }) {
   const [catalogs, setCatalogs] = useState<Catalog[]>([]);
-  const [catalogId, setCatalogId] = useState("");
+  const [catalogId, setCatalogId] = useState(() => new URLSearchParams(location.search).get("catalog") ?? "");
   const [products, setProducts] = useState<StorefrontProduct[]>([]);
-  const [language, setLanguage] = useState<"de" | "en">("de");
+  const [language, setLanguage] = useState<"de" | "en">(() => new URLSearchParams(location.search).get("language") === "en" ? "en" : "de");
   const [error, setError] = useState("");
   useEffect(() => {
     request<Catalog[]>("/api/catalogs")
@@ -1657,4 +985,4 @@ function Storefront({
   />;
 }
 
-createRoot(document.getElementById("root")!).render(<React.StrictMode><App /><Toaster richColors position="top-right" /></React.StrictMode>);
+createRoot(document.getElementById("root")!).render(<React.StrictMode><ConfirmationProvider><App /></ConfirmationProvider><Toaster richColors position="top-right" /></React.StrictMode>);

@@ -34,6 +34,8 @@ public static class DependencyInjection
         services.AddScoped<IProductRepository, ProductRepository>();
         services.AddScoped<ICatalogRepository, CatalogRepository>();
         services.AddScoped<IContentGenerationStore, ContentGenerationStore>();
+        services.AddScoped<IGenerationAuditReader, ProductHub.Infrastructure.Content.GenerationAuditReader>();
+        services.AddScoped<IGenerationJobService, ProductHub.Infrastructure.Content.GenerationJobService>();
         services.AddScoped<IKnowledgeDocumentStore, KnowledgeDocumentStore>();
         services.AddScoped<IAgentWorkflowStore, AgentWorkflowStore>();
         services
@@ -52,6 +54,14 @@ public static class DependencyInjection
             .Validate(
                 x => x.TimeoutSeconds is >= 1 and <= 600,
                 "AI timeout must be between 1 and 600 seconds."
+            )
+            .Validate(
+                x => float.IsFinite(x.Temperature) && x.Temperature is >= 0 and <= 2,
+                "AI temperature must be between 0 and 2."
+            )
+            .Validate(
+                x => x.MaxOutputTokens is >= 128 and <= 16384,
+                "AI output token limit must be 128–16384."
             )
             .ValidateOnStart();
         services.AddSingleton<IChatClient>(provider =>

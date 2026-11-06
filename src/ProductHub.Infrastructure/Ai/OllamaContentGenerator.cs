@@ -10,12 +10,17 @@ using ProductHub.Application.Content;
 
 namespace ProductHub.Infrastructure.Ai;
 
-internal sealed class OllamaContentGenerator(
+public sealed class OllamaContentGenerator(
     IOptions<AiSettings> settings,
-    ILogger<OllamaContentGenerator> logger
+    ILogger<OllamaContentGenerator> logger,
+    IChatClient? client = null
 ) : IContentGenerator
 {
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        UnmappedMemberHandling = System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow,
+        AllowDuplicateProperties = false,
+    };
 
     public async Task<GeneratedProductContent> GenerateAsync(
         ProductContentContext context,
@@ -23,7 +28,10 @@ internal sealed class OllamaContentGenerator(
         CancellationToken cancellationToken
     )
     {
-        IChatClient chatClient = new OllamaApiClient(settings.Value.Endpoint, options.Model);
+        using var ownedClient = client is null
+            ? new OllamaApiClient(settings.Value.Endpoint, options.Model)
+            : null;
+        IChatClient chatClient = client ?? ownedClient!;
         var productData = JsonSerializer.Serialize(
             new
             {
@@ -73,7 +81,18 @@ internal sealed class OllamaContentGenerator(
             {
                 var response = await chatClient.GetResponseAsync(
                     messages,
-                    new ChatOptions { ResponseFormat = ChatResponseFormat.Json },
+                    new ChatOptions
+                    {
+                        ModelId = options.Model,
+                        ResponseFormat = ChatResponseFormat.ForJsonSchema(
+                            GeneratedContentContract.Schema,
+                            "product_content",
+                            "Verified product content"
+                        ),
+                        Temperature = options.Temperature,
+                        Seed = options.Seed,
+                        MaxOutputTokens = options.MaxOutputTokens,
+                    },
                     linked.Token
                 );
                 var payload =
@@ -83,6 +102,14 @@ internal sealed class OllamaContentGenerator(
                         "Ollama returned an empty JSON response."
                     );
 
+                GeneratedContentContract.Validate(
+                    new(
+                        payload.Title ?? "",
+                        payload.ShortDescription ?? "",
+                        payload.LongDescription ?? "",
+                        payload.Highlights ?? []
+                    )
+                );
                 modelCall.Stop();
                 logger.LogInformation(
                     "Ollama generated content for SKU {Sku} in {model_latency_ms} ms with "
@@ -114,6 +141,10 @@ internal sealed class OllamaContentGenerator(
                     exception
                 );
             }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
             catch (JsonException exception)
             {
                 throw new ContentGenerationException(
@@ -125,7 +156,7 @@ internal sealed class OllamaContentGenerator(
             catch (Exception exception) when (IsTransient(exception) && attempt < 2)
             {
                 lastError = exception;
-                await Task.Delay(TimeSpan.FromMilliseconds(250), linked.Token);
+                await Task.Delay(TimeSpan.FromMilliseconds(250), cancellationToken);
             }
             catch (Exception exception) when (IsTransient(exception))
             {
@@ -178,9 +209,16 @@ internal sealed class OllamaContentGenerator(
 
     private sealed class ModelOutput
     {
+        [System.Text.Json.Serialization.JsonRequired]
         public string? Title { get; init; }
+
+        [System.Text.Json.Serialization.JsonRequired]
         public string? ShortDescription { get; init; }
+
+        [System.Text.Json.Serialization.JsonRequired]
         public string? LongDescription { get; init; }
+
+        [System.Text.Json.Serialization.JsonRequired]
         public List<string>? Highlights { get; init; }
     }
 }

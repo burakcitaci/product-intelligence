@@ -14,6 +14,7 @@ public sealed class ProductHubDbContext(DbContextOptions<ProductHubDbContext> op
     public DbSet<Product> Products => Set<Product>();
     public DbSet<Catalog> Catalogs => Set<Catalog>();
     public DbSet<ContentDraft> ContentDrafts => Set<ContentDraft>();
+    public DbSet<GenerationJob> GenerationJobs => Set<GenerationJob>();
     public DbSet<AiGeneration> AiGenerations => Set<AiGeneration>();
     public DbSet<KnowledgeDocument> KnowledgeDocuments => Set<KnowledgeDocument>();
     public DbSet<DocumentChunk> DocumentChunks => Set<DocumentChunk>();

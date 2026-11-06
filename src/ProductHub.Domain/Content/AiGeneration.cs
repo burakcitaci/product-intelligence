@@ -70,6 +70,11 @@ public sealed class AiGeneration
     public string Language { get; private set; } = null!;
     public GroundingMode GroundingMode { get; private set; }
     public int? RequestedTopK { get; private set; }
+    public string? GenerationParametersJson { get; private set; }
+
+    public void RecordParameters(string parametersJson) =>
+        GenerationParametersJson = Required(parametersJson, nameof(parametersJson), 2000);
+
     public bool IncludeFacts { get; private set; } = true;
     public RetrievalStatus RetrievalStatus { get; private set; }
     public long? RetrievalDurationMs { get; private set; }

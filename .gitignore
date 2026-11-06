@@ -11,3 +11,5 @@ TestResults/
 .artifacts/
 *.user
 *.log
+__pycache__/
+*.pyc

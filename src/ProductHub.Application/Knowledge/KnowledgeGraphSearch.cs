@@ -7,6 +7,16 @@ namespace ProductHub.Application.Knowledge;
 internal static class KnowledgeGraphSearch
 {
     private const int MaxNodes = 500;
+    private const string GraphVersion = "graph-v2/terms-v1";
+    private static readonly object CacheLock = new();
+    private static readonly Dictionary<string, Projection> Cache = [];
+
+    private sealed record Projection(
+        Dictionary<Guid, HashSet<string>> Terms,
+        Dictionary<Guid, Edge[]> Edges,
+        DateTimeOffset CreatedAt
+    );
+
     private const int MaxNeighbors = 12;
     private const int MaxHops = 2;
     private const int MaxExcerptCharacters = 2400;
@@ -35,6 +45,7 @@ internal static class KnowledgeGraphSearch
             .Where(x =>
                 x.Document.ProductId == query.ProductId
                 && x.Document.Status == DocumentIngestionStatus.Completed
+                && x.Document.SupersededByDocumentId is null
             )
             .DistinctBy(x => x.Id)
             .Take(MaxNodes)
@@ -43,63 +54,46 @@ internal static class KnowledgeGraphSearch
         if (seeds.Length == 0)
             return [];
 
-        var terms = nodes.ToDictionary(x => x.Key, x => Terms(x.Value.Text));
-        var postings = new Dictionary<string, List<Guid>>(StringComparer.Ordinal);
-        foreach (var (id, words) in terms)
-        {
-            ct.ThrowIfCancellationRequested();
-            foreach (var word in words)
-            {
-                if (!postings.TryGetValue(word, out var ids))
-                    postings[word] = ids = [];
-                ids.Add(id);
-            }
-        }
-        // Suppress hubs and singletons: only shared, relatively rare concepts create edges.
-        var maximumFrequency = Math.Min(16, Math.Max(2, nodes.Count * 2 / 5));
-        var concepts = terms.ToDictionary(
-            x => x.Key,
-            x =>
-                x.Value.Where(term =>
-                        postings[term].Count >= 2 && postings[term].Count <= maximumFrequency
-                    )
-                    .OrderBy(term => postings[term].Count)
-                    .ThenBy(term => term, StringComparer.Ordinal)
-                    .Take(24)
-                    .ToHashSet(StringComparer.Ordinal)
+        // Refresh the SQL corpus before every cache lookup. Membership, file hash, chunk
+        // text/ordinal and vocabulary version all enter the revision; deleted evidence cannot
+        // be resurrected from a previous projection.
+        var revision = EvidenceRevision.Hash(
+            GraphVersion
+                + ":"
+                + query.ProductId
+                + ":"
+                + string.Join(
+                    "|",
+                    nodes.Values.OrderBy(x => x.Id).Select(EvidenceRevision.ForChunk)
+                )
         );
-        var ordinalIndex = nodes.Values.ToDictionary(x => (x.DocumentId, x.Ordinal));
-        var edges = new Dictionary<Guid, Edge[]>();
-        foreach (var (id, chunk) in nodes)
+        Projection? projection;
+        lock (CacheLock)
         {
-            ct.ThrowIfCancellationRequested();
-            var shared = new Dictionary<Guid, List<string>>();
-            foreach (var concept in concepts[id])
-            foreach (var neighbor in postings[concept])
-            {
-                if (neighbor == id || !concepts[neighbor].Contains(concept))
-                    continue;
-                if (!shared.TryGetValue(neighbor, out var labels))
-                    shared[neighbor] = labels = [];
-                labels.Add(concept);
-            }
-            var neighbors = shared
-                .Select(pair => new Edge(
-                    pair.Key,
-                    .7 + Math.Min(.3, pair.Value.Count * .05),
-                    $"shared-concept:{pair.Value.Order(StringComparer.Ordinal).First()}"
-                ))
-                .ToList();
-            foreach (var ordinal in new[] { chunk.Ordinal - 1, chunk.Ordinal + 1 })
-                if (ordinalIndex.TryGetValue((chunk.DocumentId, ordinal), out var adjacent))
-                    neighbors.Add(new(adjacent.Id, .75, "adjacent-chunk"));
-            edges[id] = neighbors
-                .OrderByDescending(x => x.Weight)
-                .ThenBy(x => x.Target)
-                .DistinctBy(x => x.Target)
-                .Take(MaxNeighbors)
-                .ToArray();
+            foreach (
+                var expired in Cache
+                    .Where(p =>
+                        DateTimeOffset.UtcNow - p.Value.CreatedAt > TimeSpan.FromMinutes(10)
+                    )
+                    .Select(p => p.Key)
+                    .ToArray()
+            )
+                Cache.Remove(expired);
+            Cache.TryGetValue(revision, out projection);
         }
+        var cacheHit = projection is not null;
+        if (projection is null)
+        {
+            projection = BuildProjection(nodes, ct);
+            lock (CacheLock)
+            {
+                if (Cache.Count >= 32)
+                    Cache.Remove(Cache.OrderBy(p => p.Value.CreatedAt).First().Key);
+                Cache[revision] = projection;
+            }
+        }
+        var terms = projection.Terms;
+        var edges = projection.Edges;
 
         // Reserve half the output for semantic anchors; expand only from those returned anchors.
         var anchorCount = Math.Min(8, Math.Max(1, (query.Limit + 1) / 2));
@@ -180,7 +174,16 @@ internal static class KnowledgeGraphSearch
                     (float)route.Score,
                     Citation(chunk),
                     route.Hops,
-                    route.Path
+                    route.Path,
+                    DocumentRevision: chunk.Document.Sha256,
+                    ChunkRevision: EvidenceRevision.ForChunk(chunk),
+                    GraphRevision: revision,
+                    GraphCacheHit: cacheHit,
+                    GraphConcepts: words
+                        .Order(StringComparer.Ordinal)
+                        .Take(24)
+                        .Select(t => $"{KnowledgeTerms.ConceptType(t)}:{t}")
+                        .ToArray()
                 )
             );
             selectedTerms.Add(words);
@@ -189,15 +192,77 @@ internal static class KnowledgeGraphSearch
         return selected;
     }
 
+    private static Projection BuildProjection(
+        Dictionary<Guid, DocumentChunk> nodes,
+        CancellationToken ct
+    )
+    {
+        var terms = nodes.ToDictionary(x => x.Key, x => Terms(x.Value.Text));
+        var postings = new Dictionary<string, List<Guid>>(StringComparer.Ordinal);
+        foreach (var (id, words) in terms)
+        {
+            ct.ThrowIfCancellationRequested();
+            foreach (var word in words)
+            {
+                if (!postings.TryGetValue(word, out var ids))
+                    postings[word] = ids = [];
+                ids.Add(id);
+            }
+        }
+        // Suppress hubs and singletons: only shared, relatively rare concepts create edges.
+        var maximumFrequency = Math.Min(16, Math.Max(2, nodes.Count * 2 / 5));
+        var concepts = terms.ToDictionary(
+            x => x.Key,
+            x =>
+                x.Value.Where(term =>
+                        postings[term].Count >= 2 && postings[term].Count <= maximumFrequency
+                    )
+                    .OrderBy(term => postings[term].Count)
+                    .ThenBy(term => term, StringComparer.Ordinal)
+                    .Take(24)
+                    .ToHashSet(StringComparer.Ordinal)
+        );
+        var ordinalIndex = nodes.Values.ToDictionary(x => (x.DocumentId, x.Ordinal));
+        var edges = new Dictionary<Guid, Edge[]>();
+        foreach (var (id, chunk) in nodes)
+        {
+            ct.ThrowIfCancellationRequested();
+            var shared = new Dictionary<Guid, List<string>>();
+            foreach (var concept in concepts[id])
+            foreach (var neighbor in postings[concept])
+            {
+                if (neighbor == id || !concepts[neighbor].Contains(concept))
+                    continue;
+                if (!shared.TryGetValue(neighbor, out var labels))
+                    shared[neighbor] = labels = [];
+                labels.Add(concept);
+            }
+            var neighbors = shared
+                .Select(pair => new Edge(
+                    pair.Key,
+                    .7 + Math.Min(.3, pair.Value.Count * .05),
+                    $"shared-concept:{pair.Value.Order(StringComparer.Ordinal).First()}"
+                ))
+                .ToList();
+            foreach (var ordinal in new[] { chunk.Ordinal - 1, chunk.Ordinal + 1 })
+                if (ordinalIndex.TryGetValue((chunk.DocumentId, ordinal), out var adjacent))
+                    neighbors.Add(new(adjacent.Id, .75, "adjacent-chunk"));
+            edges[id] = neighbors
+                .OrderByDescending(x => x.Weight)
+                .ThenBy(x => x.Target)
+                .DistinctBy(x => x.Target)
+                .Take(MaxNeighbors)
+                .ToArray();
+        }
+
+        return new(terms, edges, DateTimeOffset.UtcNow);
+    }
+
     private static HashSet<string> Terms(string text) =>
-        Regex
-            .Matches(
-                text[..Math.Min(text.Length, MaxExcerptCharacters)].ToLowerInvariant(),
-                @"[\p{L}\p{N}][\p{L}\p{N}-]{3,39}",
-                RegexOptions.CultureInvariant
-            )
-            .Select(x => x.Value)
-            .Where(x => !StopWords.Contains(x))
+        KnowledgeTerms
+            .Tokenize(text[..Math.Min(text.Length, MaxExcerptCharacters)])
+            .Where(t => t.Length is >= 4 and <= 40 && !StopWords.Contains(t))
+            .Select(KnowledgeTerms.Normalize)
             .ToHashSet(StringComparer.Ordinal);
 
     private static double Similarity(HashSet<string> left, HashSet<string> right)

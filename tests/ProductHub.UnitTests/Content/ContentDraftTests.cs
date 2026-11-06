@@ -5,7 +5,6 @@ namespace ProductHub.UnitTests.Content;
 public sealed class ContentDraftTests
 {
     [Theory]
-    [InlineData(2)]
     [InlineData(6)]
     public void Create_RejectsHighlightCountOutsideBounds(int count) =>
         Assert.Throws<ArgumentException>(() =>
@@ -19,6 +18,26 @@ public sealed class ContentDraftTests
                 Guid.NewGuid()
             )
         );
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    public void SparseDraft_DoesNotRequireInventedHighlights(int count)
+    {
+        var draft = ContentDraft.Create(
+            Guid.NewGuid(),
+            "en",
+            "Bottle",
+            "Acme Bottle",
+            "Acme Bottle",
+            Enumerable.Range(0, count).Select(i => $"Fact {i}"),
+            Guid.NewGuid()
+        );
+        Assert.Equal(count, draft.Highlights.Count);
+        draft.UpdateContent("Bottle", "Acme Bottle", "Acme Bottle", []);
+        Assert.Empty(draft.Highlights);
+    }
 
     [Fact]
     public void Create_IsAlwaysPendingReview()

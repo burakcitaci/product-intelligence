@@ -20,7 +20,7 @@ Install:
 
 - [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/)
-- [Node.js](https://nodejs.org/) 22 or newer
+- [Node.js](https://nodejs.org/) 22.18 or newer
 - [Ollama](https://ollama.com/download)
 - PowerShell 7 on Windows, or Bash on macOS/Linux
 
@@ -123,12 +123,12 @@ The generation dialog independently controls **Include product facts** and **Doc
 | --- | --- |
 | No RAG | Generate from identity and optional structured facts, without documents |
 | Naive RAG | One semantic vector search over the selected product's uploaded knowledge |
-| Advanced RAG | Up to three searches, wider candidate retrieval, BM25 candidate reranking, reciprocal rank fusion, near-duplicate removal, and context budgeting |
-| Graph RAG | Advanced semantic anchors plus up to two hops through shared concepts and adjacent passages in a product-scoped document graph |
+| Advanced RAG | Up to three vector searches plus independent SQL keyword candidates, BM25 reranking, reciprocal rank fusion, near-duplicate removal, and context budgeting |
+| Graph RAG | Advanced hybrid anchors plus up to two hops through shared concepts and adjacent passages in a product-scoped document graph |
 
 All three RAG modes require completed, indexed product documents and accept Top-K from 1 to 20 (default 5). Advanced RAG returns up to Top-K excerpts within a 12,000-character retrieved-context budget. It reuses Ollama embeddings and Qdrant; no extra service or reindexing is needed. Retrieval failure stops generation instead of silently falling back.
 
-Graph RAG rebuilds a local graph from up to 500 completed chunks per product. It can bring in related text absent from vector results, keeps the same excerpt/context limits, and records paths in the model audit. Select **Graph RAG** in the dialog or send `"retrievalMode": "Graph"` in the generation request. No extra migration, graph database, or reindexing is required for this mode. This is a lexical chunk/concept graph rather than the full Microsoft GraphRAG indexing and community-summary pipeline.
+Graph RAG validates current SQL evidence and caches a versioned graph of up to 500 completed chunks per product. It can bring in related text absent from vector results, keeps the same excerpt/context limits, and records paths in the model audit. Select **Graph RAG** in the dialog or send `"retrievalMode": "Graph"` in the generation request. No extra migration, graph database, or reindexing is required for this mode. This is a lexical chunk/concept graph rather than the full Microsoft GraphRAG indexing and community-summary pipeline.
 
 Without facts and without RAG, generation is limited to product identity. Uploaded guidance remains advisory and must not become invented specifications. Review is required before publishing.
 
@@ -146,7 +146,7 @@ API example for advanced RAG without structured facts:
 
 Send this to `POST /api/products/{productId}/drafts/generate` with an administrator session and a fresh `Idempotency-Key` header. Existing requests with `useRag: true` select naive RAG when `retrievalMode` is omitted.
 
-This includes migration `20261103120000_AddGenerationFactsSelection` and defaults to prompt `product-description-v3`. Development startup applies pending migrations; other deployments must apply them before restarting the API:
+This includes migration `20261103120000_AddGenerationFactsSelection` and defaults to prompt `product-description-v4`. Development startup applies pending migrations; other deployments must apply them before restarting the API:
 
 ```bash
 dotnet ef database update --project src/ProductHub.Infrastructure --startup-project src/ProductHub.Api
@@ -200,6 +200,7 @@ Frontend:
 ```bash
 cd src/ProductHub.Web
 npm ci
+npm test
 npm run build
 ```
 
@@ -208,6 +209,39 @@ Integration tests use an isolated SQL Server Testcontainer:
 ```bash
 dotnet test tests/ProductHub.IntegrationTests/ProductHub.IntegrationTests.csproj
 ```
+
+New generations use an explicit output schema and audit temperature, seed, and output-token limits. Apply migration 20261104100000_AddGenerationParameters before running the updated API; development startup applies pending migrations. See [generation documentation](docs/architecture/generation-and-rag.md#schema-constrained-generation).
+
+New drafts now include expandable claim/evidence review with saved source snapshots. Sparse evidence permits zero to five highlights and explicit warnings. Flagged drafts require authenticated human acknowledgement before approval/publication. This is conservative review assistance, not automated fact verification. Apply migration 20261104110000_AddDraftClaimReview. See [claim review documentation](docs/architecture/generation-and-rag.md#claim-review-and-saved-evidence).
+
+## Review queue and version comparison
+
+Catalogs now offer server-backed filters for pending review, missing published language, missing source facts and stale published content. Search, language and pagination persist while navigating within a browser session. Counts cover the whole matching catalog, including products beyond the first 100.
+
+Saved drafts can be compared with the published version or another saved version, with inline changes and generation settings. Unsaved edits show a warning and navigation guard; background generation keeps the current draft/editor visible. See [Review workspace](docs/ui-review-workspace.md) for definitions, API behavior, limits and verification.
+
+## Durable AI generation
+
+The UI queues generation in SQL Server and reconnects to progress when a product is reopened. Stages include Queued, Retrieving, Generating, Validating and Ready. Model audit includes failed and cancelled attempts even when no draft was created, with status/language filters, errors, settings and evidence; matched job/generation records appear once. Cancellation is available, existing content stays visible, and interrupted model calls are not automatically repeated. Apply migration `20261104120000_AddGenerationJobs` before starting the updated API. The synchronous `/drafts/generate` endpoint remains available.
+
+Advanced and Graph RAG now retrieve independent SQL keyword candidates alongside vector results, including bounded English/German synonyms and exact model tokens. Source audits include document/chunk revisions, candidate counts and graph cache provenance. Named generation presets save common choices in the current browser.
+
+See [Durable generation jobs](docs/architecture/generation-jobs.md) and [generation/retrieval details](docs/architecture/generation-and-rag.md). Current verification includes 32 integration tests, 18 desktop/mobile browser checks, 16 offline evaluator checks and 17 live API checks. The final unit-test binary was restricted by Windows application control. See [measured acceptance results](docs/evaluation-results-2026-11-04.md), including the model numeric error caught by review and the optional reranker decision.
+
+Knowledge sources now support explicit supersession and extraction-version auditing. Apply migration `20261104130000_AddDocumentRevisions` along with the earlier pending migrations. Old evidence stays available for review while retrieval uses active sources. Failed vector writes persist Failed status rather than advertising ready documents.
+
+Run browser acceptance checks with `npm run test:browser` from the web project (installed Edge on Windows; `npx playwright install --with-deps chromium` on Linux). CI runs the production-build desktop/mobile suite. Workspace links restore the selected product after reload, and lost generation submissions retain an idempotency key for safe retries.
+
+## AI evaluation
+
+A bounded local runner covers 48 German/English cases and all four retrieval modes with facts included or excluded. Python 3.10+ is needed only for this optional tool.
+
+```bash
+python scripts/evaluate.py --dry-run
+python -m unittest discover -s tests/evaluation -p test_evaluate.py -v
+```
+
+Live runs require the local application and administrator credentials in environment variables. They default to four generations and save checkpointed JSON reports; no draft is approved or published. See [Evaluation guide](docs/evaluation.md) for smoke runs, filters, limits, metrics, and verification caveats.
 
 ## Scripts
 
@@ -230,5 +264,6 @@ More detail is available in:
 - [Data model](docs/architecture/data-model.md)
 - [Generation and RAG](docs/architecture/generation-and-rag.md)
 - [UI and AI implementation roadmap](docs/ui-ai-roadmap.md)
+- [Evaluation guide](docs/evaluation.md)
 - [Modular-monolith ADR](docs/adr/0001-modular-monolith.md)
 - [Local Ollama ADR](docs/adr/0002-local-ollama.md)

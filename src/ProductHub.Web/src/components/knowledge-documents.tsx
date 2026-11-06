@@ -1,0 +1,14 @@
+import { useState } from "react";
+import { Trash2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { NativeSelect } from "@/components/ui/native-select";
+
+export type KnowledgeDocumentView = { id: string; fileName: string; status: number | string; createdAt?: string; revision?: string | null; extractionVersion?: string; supersededByDocumentId?: string | null };
+export const documentIsReady = (document: KnowledgeDocumentView) => !document.supersededByDocumentId && (document.status === 1 || String(document.status).toLowerCase() === "completed");
+export function KnowledgeDocuments({ documents, busy, onRemove, onSupersede }: { documents: KnowledgeDocumentView[]; busy: boolean; onRemove: (document: KnowledgeDocumentView) => void; onSupersede: (id: string, replacementId: string) => void }) {
+  const [replacements, setReplacements] = useState<Record<string, string>>({});
+  return <div className="grid gap-2"><p className="text-xs text-muted-foreground">Upload a new revision, then supersede the old source. Saved draft evidence remains available.</p>{documents.map(document => {
+    const newer = documents.filter(candidate => candidate.id !== document.id && documentIsReady(candidate) && new Date(candidate.createdAt ?? 0) > new Date(document.createdAt ?? 0));
+    return <div key={document.id} className="rounded-md border p-3"><div className="flex items-center gap-2"><span className="min-w-0 flex-1 truncate text-sm font-medium">{document.fileName}</span><span className="text-xs text-muted-foreground">{document.supersededByDocumentId ? "Superseded" : documentIsReady(document) ? "Ready" : document.status === 2 || String(document.status).toLowerCase() === "failed" ? "Failed" : "Indexing"}</span><Button type="button" size="icon" variant="ghost" disabled={busy} aria-label={`Remove ${document.fileName}`} onClick={() => onRemove(document)}><Trash2 /></Button></div><details className="text-xs text-muted-foreground"><summary className="cursor-pointer">Revision details</summary><p className="mt-1 break-all">{document.revision ?? "Legacy revision"}<br />{document.extractionVersion ?? "legacy"}{document.supersededByDocumentId && <><br />Superseded by {document.supersededByDocumentId}</>}</p></details>{documentIsReady(document) && newer.length > 0 && <div className="mt-2 flex flex-wrap gap-2"><NativeSelect aria-label={`Replacement for ${document.fileName}`} disabled={busy} value={replacements[document.id] ?? ""} onChange={event => setReplacements(values => ({ ...values, [document.id]: event.target.value }))}><option value="">Supersede with…</option>{newer.map(candidate => <option value={candidate.id} key={candidate.id}>{candidate.fileName} · {candidate.id.slice(0, 8)}</option>)}</NativeSelect><Button type="button" size="sm" variant="outline" disabled={busy || !replacements[document.id]} onClick={() => onSupersede(document.id, replacements[document.id])}>Supersede source</Button></div>}</div>;
+  })}</div>;
+}

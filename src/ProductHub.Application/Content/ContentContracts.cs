@@ -32,7 +32,8 @@ public sealed record ContentDraftDto(
     ContentDraftStatus Status,
     bool IsCurrent,
     DateTimeOffset CreatedAt,
-    Guid GenerationId
+    Guid GenerationId,
+    ClaimReviewReport? Review = null
 );
 
 public sealed record AiGenerationMetadataDto(
@@ -57,7 +58,15 @@ public sealed record AiGenerationMetadataDto(
     IReadOnlyList<RetrievalSourceDto> RetrievalSources,
     string? RetrievalErrorCode,
     bool IncludeFacts,
-    string RetrievalMode
+    string RetrievalMode,
+    GenerationParametersDto? Parameters = null
+);
+
+public sealed record GenerationParametersDto(
+    string SchemaVersion,
+    float Temperature,
+    long? Seed,
+    int MaxOutputTokens
 );
 
 public sealed record RetrievalSourceDto(
@@ -66,7 +75,15 @@ public sealed record RetrievalSourceDto(
     string Citation,
     float Score,
     int? GraphHops = null,
-    IReadOnlyList<string>? GraphPath = null
+    IReadOnlyList<string>? GraphPath = null,
+    string? DocumentRevision = null,
+    string? ChunkRevision = null,
+    string? RetrievalVersion = null,
+    int DenseCandidateCount = 0,
+    int LexicalCandidateCount = 0,
+    string? GraphRevision = null,
+    bool? GraphCacheHit = null,
+    IReadOnlyList<string>? GraphConcepts = null
 );
 
 public sealed class NotFoundException(string message) : Exception(message);

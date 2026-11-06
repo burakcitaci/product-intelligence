@@ -143,6 +143,8 @@ namespace ProductHub.Infrastructure.Persistence.Migrations
                         .IsUnicode(false)
                         .HasColumnType("varchar(100)");
 
+                    b.Property<string>("GenerationParametersJson").HasColumnType("nvarchar(max)");
+
                     b.Property<bool>("IncludeFacts").HasColumnType("bit");
 
                     b.Property<int?>("InputTokens")
@@ -223,8 +225,75 @@ namespace ProductHub.Infrastructure.Persistence.Migrations
                     b.ToTable("AiGenerations", (string)null);
                 });
 
+            modelBuilder.Entity("ProductHub.Domain.Content.GenerationJob", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("ProductId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("IdempotencyKey")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<string>("CommandJson")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("RequestedBy")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<string>("Stage")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<Guid?>("LeaseToken")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTimeOffset?>("LeaseExpiresAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<bool>("CancellationRequested")
+                        .HasColumnType("bit");
+
+                    b.Property<Guid?>("DraftId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("ErrorCode")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<string>("ErrorMessage")
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
+                    b.HasKey("Id");
+                    b.HasIndex("ProductId", "IdempotencyKey").IsUnique();
+                    b.HasIndex("Status", "CreatedAt");
+                    b.ToTable("GenerationJobs", (string)null);
+                });
+
             modelBuilder.Entity("ProductHub.Domain.Content.ContentDraft", b =>
                 {
+                    b.Property<string>("ClaimReviewJson").HasColumnType("nvarchar(max)");
+
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uniqueidentifier");
@@ -351,6 +420,10 @@ namespace ProductHub.Infrastructure.Persistence.Migrations
                         .IsRequired()
                         .HasMaxLength(30)
                         .HasColumnType("nvarchar(30)");
+
+                    b.Property<string>("ExtractionVersion").IsRequired().HasMaxLength(100).HasColumnType("nvarchar(100)");
+                    b.Property<Guid?>("SupersededByDocumentId").IsConcurrencyToken().HasColumnType("uniqueidentifier");
+                    b.Property<DateTimeOffset?>("SupersededAt").HasColumnType("datetimeoffset");
 
                     b.HasKey("Id");
 
@@ -518,6 +591,10 @@ namespace ProductHub.Infrastructure.Persistence.Migrations
                         .OnDelete(DeleteBehavior.Cascade);
 
                     b.Navigation("Chunks");
+                });
+            modelBuilder.Entity("ProductHub.Domain.Content.GenerationJob", b =>
+                {
+                    b.HasOne("ProductHub.Domain.Products.Product", null).WithMany().HasForeignKey("ProductId").OnDelete(DeleteBehavior.Cascade).IsRequired();
                 });
 #pragma warning restore 612, 618
         }

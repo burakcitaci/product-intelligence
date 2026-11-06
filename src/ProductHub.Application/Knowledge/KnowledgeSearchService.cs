@@ -78,20 +78,51 @@ public sealed class KnowledgeSearchService(
             rankings.SelectMany(x => x).Select(x => x.Id).Distinct(),
             cancellationToken
         );
-        // SQL remains authoritative: discard stale, incomplete, or incorrectly scoped vector hits.
+        var lexical =
+            query.Mode == RetrievalMode.Naive
+                ? Array.Empty<DocumentChunk>()
+                : await store.SearchLexicalChunksAsync(
+                    query.ProductId,
+                    KnowledgeTerms.LexicalQueries(query.Query),
+                    MaxCandidatesPerQuery,
+                    cancellationToken
+                );
+        // SQL remains authoritative for both independent candidate paths.
         var candidates = chunks
-            .Values.Where(x =>
+            .Values.Concat(lexical)
+            .Where(x =>
                 x.Document.Status == DocumentIngestionStatus.Completed
+                && x.Document.SupersededByDocumentId is null
                 && (query.ProductId is null || x.Document.ProductId == query.ProductId)
             )
+            .DistinctBy(x => x.Id)
             .ToDictionary(x => x.Id);
+        var denseCount = chunks.Values.Count(x => candidates.ContainsKey(x.Id));
+        var lexicalCount = lexical.Count(x => candidates.ContainsKey(x.Id));
+        IReadOnlyList<KnowledgeSearchResult> Audit(IReadOnlyList<KnowledgeSearchResult> results) =>
+            results
+                .Select(result =>
+                    result with
+                    {
+                        RetrievalVersion =
+                            query.Mode == RetrievalMode.Graph ? "graph-v2/" + KnowledgeTerms.Version
+                            : query.Mode == RetrievalMode.Advanced
+                                ? "hybrid-v2/" + KnowledgeTerms.Version
+                            : "naive-v1",
+                        DenseCandidateCount = denseCount,
+                        LexicalCandidateCount = lexicalCount,
+                    }
+                )
+                .ToArray();
 
         if (query.Mode == RetrievalMode.Naive)
-            return rankings[0]
-                .Where(x => candidates.ContainsKey(x.Id))
-                .DistinctBy(x => x.Id)
-                .Select(hit => Map(candidates[hit.Id], hit.Score))
-                .ToArray();
+            return Audit(
+                rankings[0]
+                    .Where(x => candidates.ContainsKey(x.Id))
+                    .DistinctBy(x => x.Id)
+                    .Select(hit => Map(candidates[hit.Id], hit.Score))
+                    .ToArray()
+            );
 
         if (query.Mode == RetrievalMode.Graph)
         {
@@ -112,9 +143,9 @@ public sealed class KnowledgeSearchService(
                 500,
                 cancellationToken
             );
-            return KnowledgeGraphSearch.Retrieve(query, seeds, corpus, cancellationToken);
+            return Audit(KnowledgeGraphSearch.Retrieve(query, seeds, corpus, cancellationToken));
         }
-        return RankAdvanced(query, rankings, candidates, cancellationToken);
+        return Audit(RankAdvanced(query, rankings, candidates, cancellationToken));
     }
 
     private static string[] ExpandQueries(string query)
@@ -154,14 +185,21 @@ public sealed class KnowledgeSearchService(
             if (scores.ContainsKey(hit.Id))
                 scores[hit.Id] += 1d / (rankConstant + index + 1);
 
-        var tokens = candidates.ToDictionary(x => x.Key, x => Tokenize(x.Value.Text));
-        var queryTerms = Tokenize(query.Query).Distinct().ToArray();
+        var tokens = candidates.ToDictionary(
+            x => x.Key,
+            x => KnowledgeTerms.Tokenize(x.Value.Text).Select(KnowledgeTerms.Normalize).ToArray()
+        );
+        var queryTerms = KnowledgeTerms
+            .Tokenize(query.Query)
+            .Select(KnowledgeTerms.Normalize)
+            .Distinct()
+            .ToArray();
         var averageLength = Math.Max(1d, tokens.Values.Average(x => x.Length));
         var documentFrequency = queryTerms.ToDictionary(
             term => term,
             term => tokens.Values.Count(words => words.Contains(term))
         );
-        // BM25 reranks the semantic candidate union; this is not a full-corpus keyword index.
+        // BM25 ranks the independent dense/SQL lexical union; RRF fuses both signals.
         var lexical = candidates
             .Keys.Select(id =>
             {
@@ -189,6 +227,8 @@ public sealed class KnowledgeSearchService(
             scores[lexical[index].Id] += 1d / (rankConstant + index + 1);
 
         var maximumScore = scores.Values.Max();
+        if (maximumScore <= 0)
+            return [];
         var remaining = scores.Keys.ToHashSet();
         var selected = new List<KnowledgeSearchResult>();
         var selectedTerms = new List<HashSet<string>>();
@@ -227,13 +267,6 @@ public sealed class KnowledgeSearchService(
         return selected;
     }
 
-    private static string[] Tokenize(string text) =>
-        Regex
-            .Matches(text.ToLowerInvariant(), @"[\p{L}\p{N}]+", RegexOptions.CultureInvariant)
-            .Select(x => x.Value)
-            .Where(x => x.Length > 1)
-            .ToArray();
-
     private static double Similarity(HashSet<string> left, HashSet<string> right)
     {
         var intersection = left.Count(right.Contains);
@@ -249,6 +282,8 @@ public sealed class KnowledgeSearchService(
             chunk.Ordinal,
             chunk.Text,
             score,
-            $"{chunk.Document.FileName}#chunk-{chunk.Ordinal}"
+            $"{chunk.Document.FileName}#chunk-{chunk.Ordinal}",
+            DocumentRevision: chunk.Document.Sha256,
+            ChunkRevision: EvidenceRevision.ForChunk(chunk)
         );
 }

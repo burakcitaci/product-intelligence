@@ -18,11 +18,25 @@ public sealed record ProductContentContext(
     bool IncludeFacts = true
 );
 
-public sealed record GroundingExcerpt(string Citation, string Text);
+public sealed record GroundingExcerpt(
+    string Citation,
+    string Text,
+    Guid? DocumentId = null,
+    Guid? ChunkId = null,
+    string? DocumentRevision = null,
+    string? ChunkRevision = null
+);
 
 public sealed record ProductFact(string Name, string Value, string? Unit);
 
-public sealed record GenerationOptions(string Language, string PromptVersion, string Model);
+public sealed record GenerationOptions(
+    string Language,
+    string PromptVersion,
+    string Model,
+    float Temperature = 0,
+    long? Seed = 42,
+    int MaxOutputTokens = 2048
+);
 
 public sealed record GeneratedProductContent(
     string Title,

@@ -26,6 +26,7 @@ internal sealed class ContentDraftConfiguration : IEntityTypeConfiguration<Conte
             .HasForeignKey<ContentDraft>(x => x.GenerationId)
             .OnDelete(DeleteBehavior.NoAction);
         builder.Property(x => x.Language).HasMaxLength(10).IsUnicode(false).IsRequired();
+        builder.Property(x => x.ClaimReviewJson).HasColumnType("nvarchar(max)");
         builder.Property(x => x.Title).HasMaxLength(200).IsRequired();
         builder.Property(x => x.ShortDescription).HasMaxLength(500).IsRequired();
         builder.Property(x => x.LongDescription).HasMaxLength(8000).IsRequired();

@@ -6,6 +6,30 @@ namespace ProductHub.UnitTests.Knowledge;
 public sealed class KnowledgeDocumentTests
 {
     [Fact]
+    public void Supersession_PreservesHistoricalChunksAndRejectsCyclesAndOtherProducts()
+    {
+        var product = Guid.NewGuid();
+        var old = KnowledgeDocument.Start(product, "old.md", "text/plain", "old-hash");
+        old.Complete(["Historical evidence"]);
+        var replacement = KnowledgeDocument.Start(product, "new.md", "text/plain", "new-hash");
+        replacement.Complete(["Current evidence"]);
+        old.SupersedeWith(replacement);
+        Assert.Equal(replacement.Id, old.SupersededByDocumentId);
+        Assert.NotNull(old.SupersededAt);
+        Assert.Single(old.Chunks);
+        old.SupersedeWith(replacement);
+        Assert.Throws<InvalidOperationException>(() => replacement.SupersedeWith(old));
+        var outsider = KnowledgeDocument.Start(
+            Guid.NewGuid(),
+            "other.md",
+            "text/plain",
+            "other-hash"
+        );
+        outsider.Complete(["Private"]);
+        Assert.Throws<InvalidOperationException>(() => replacement.SupersedeWith(outsider));
+    }
+
+    [Fact]
     public void Complete_CreatesOrderedChunksAndTerminalState()
     {
         var document = KnowledgeDocument.Start(

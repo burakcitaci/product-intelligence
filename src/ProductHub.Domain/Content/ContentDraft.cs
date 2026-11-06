@@ -30,11 +30,8 @@ public sealed class ContentDraft
         ShortDescription = Required(shortDescription, nameof(shortDescription), 500);
         LongDescription = Required(longDescription, nameof(longDescription), 8000);
         Highlights = highlights.Select(x => Required(x, nameof(highlights), 300)).ToList();
-        if (Highlights.Count is < 3 or > 5)
-            throw new ArgumentException(
-                "Three to five highlights are required.",
-                nameof(highlights)
-            );
+        if (Highlights.Count > 5)
+            throw new ArgumentException("At most five highlights are allowed.", nameof(highlights));
         GenerationId = generationId;
         CreatedAt = createdAt;
         Status = ContentDraftStatus.PendingReview;
@@ -50,6 +47,10 @@ public sealed class ContentDraft
     public ContentDraftStatus Status { get; private set; }
     public DateTimeOffset CreatedAt { get; private set; }
     public Guid GenerationId { get; private set; }
+    public string? ClaimReviewJson { get; private set; }
+
+    public void RecordClaimReview(string json) => ClaimReviewJson = json;
+
     public bool IsCurrent { get; private set; }
 
     public static ContentDraft Create(
@@ -91,11 +92,8 @@ public sealed class ContentDraft
         if (Status != ContentDraftStatus.PendingReview)
             throw new InvalidOperationException("Only pending drafts can be edited.");
         var materialized = highlights.Select(x => Required(x, nameof(highlights), 300)).ToList();
-        if (materialized.Count is < 3 or > 5)
-            throw new ArgumentException(
-                "Three to five highlights are required.",
-                nameof(highlights)
-            );
+        if (materialized.Count > 5)
+            throw new ArgumentException("At most five highlights are allowed.", nameof(highlights));
         Title = Required(title, nameof(title), 200);
         ShortDescription = Required(shortDescription, nameof(shortDescription), 500);
         LongDescription = Required(longDescription, nameof(longDescription), 8000);

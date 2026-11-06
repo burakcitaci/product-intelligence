@@ -16,7 +16,9 @@ Grounding is audited by `GroundingMode` (FactsOnly, IdentityOnly, Rag, AdvancedR
 
 Migration `20261103120000_AddGenerationFactsSelection` adds the boolean facts flag with a true backfill. New requests can persist false without changing authoritative product attributes. Advanced retrieval reuses existing chunks and vector points, without reindexing. See [Generation and RAG](generation-and-rag.md).
 
-Graph retrieval uses a bounded request-local projection of existing completed chunks; no graph tables are added. Graph sources persist optional `GraphHops` and `GraphPath` in the existing source-audit JSON. Historical source records retain null graph fields. No additional migration or reindexing is needed for Graph mode.
+Graph retrieval uses a bounded versioned cached projection of existing completed chunks; no graph tables are added. Graph sources persist optional `GraphHops` and `GraphPath` in the existing source-audit JSON. Historical source records retain null graph fields. No additional migration or reindexing is needed for Graph mode.
+
+The nullable GenerationParametersJson column stores schema version, temperature, seed, and output-token limit before inference. Migration 20261104100000_AddGenerationParameters adds it; historical settings remain unknown. The generation API exposes this snapshot as parameters.
 
 ## Content drafts
 
@@ -33,3 +35,13 @@ Qdrant points use `DocumentChunk.Id` as their point ID. Embeddings are intention
 `AgentWorkflows` records the product, objective, status, validated plan, tool results, optional mutation proposal, error code, and timestamps. Plans and results use JSON because their schemas are bounded application contracts and are read as an audit record rather than queried relationally.
 
 Terminal states are `Completed`, `Rejected`, and `Failed`. `AwaitingApproval` always contains a proposal; product changes occur only when approval transitions it to `Completed`.
+
+
+## Generation jobs
+
+Migration 20261104120000_AddGenerationJobs creates the durable GenerationJobs queue. Product/key is unique; command JSON preserves requested settings and requester identity. Status/stage, lease token/expiry, cancellation flag, draft result and safe error fields support reconnect and interrupted-worker recovery. Conditional SQL updates fence worker claims and final results. Jobs cascade when a product is deleted. See [job lifecycle](generation-jobs.md).
+
+Source audit JSON now includes document and chunk revisions, retrieval version, candidate counts and graph cache provenance without a new source table. Grounding snapshots retain source IDs/revisions for historical claim review. ContentDraft.ClaimReviewJson (migration 20261104110000_AddDraftClaimReview) also stores sparse-evidence warnings and authenticated warning acknowledgement. Old snapshots remain nullable. Highlights may contain zero to five items; the existing JSON storage needs no migration for this relaxed count.
+
+
+Migration 20261104130000_AddDocumentRevisions adds KnowledgeDocuments.ExtractionVersion, SupersededByDocumentId and SupersededAt. The replacement ID is retained as historical metadata, with optimistic concurrency on supersession. No cascading relation reactivates or deletes old evidence when a replacement is removed. New retrieval accepts only completed, non-superseded sources. Chunk fingerprints include the extraction policy version.
