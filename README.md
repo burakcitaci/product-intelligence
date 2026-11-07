@@ -103,18 +103,40 @@ The application records prompt version, model, token usage, latency, status, cor
 
 The generation dialog independently controls **Include product facts** and **Document retrieval**. Name, brand, and SKU are always supplied. Turning facts off removes structured attributes from retrieval queries and the generation prompt.
 
+### How generation uses RAG
+
+Before a document can ground a draft, Product Hub extracts its text, splits it into overlapping chunks, and asks the configured local Ollama embedding model (`nomic-embed-text` by default) to create a vector for each chunk. SQL Server stores the document, chunk text, and ingestion status. Qdrant stores the chunk vectors with product/document identifiers so semantic searches can find likely matches. A document becomes eligible for retrieval only after indexing completes.
+
+When generation is queued, the worker builds its retrieval query from product identity and, if enabled, structured product facts. The selected mode determines how uploaded evidence is found:
+
 | Mode | Behavior |
 | --- | --- |
 | No RAG | Generate from identity and optional structured facts, without documents |
 | Naive RAG | One semantic vector search over the selected product's uploaded knowledge |
-| Advanced RAG | Up to three vector searches plus independent SQL keyword candidates, BM25 reranking, reciprocal rank fusion, near-duplicate removal, and context budgeting |
-| Graph RAG | Advanced hybrid anchors plus up to two hops through shared concepts and adjacent passages in a product-scoped document graph |
+| Advanced RAG | Up to three semantic searches plus independent SQL keyword candidates; BM25 and reciprocal rank fusion rank results, followed by near-duplicate removal and context budgeting |
+| Graph RAG | Advanced RAG's semantic and keyword results seed a bounded, product-scoped graph of shared concepts and neighboring passages; retrieval follows up to two hops |
 
 All three RAG modes require completed, indexed product documents and accept Top-K from 1 to 20 (default 5). Advanced RAG returns up to Top-K excerpts within a 12,000-character retrieved-context budget. It reuses Ollama embeddings and Qdrant; no extra service or reindexing is needed. Retrieval failure stops generation instead of silently falling back.
 
-Graph RAG validates current SQL evidence and caches a versioned graph of up to 500 completed chunks per product. It can bring in related text absent from vector results, keeps the same excerpt/context limits, and records paths in the model audit. Select **Graph RAG** in the dialog or send `"retrievalMode": "Graph"` in the generation request. No extra migration, graph database, or reindexing is required for this mode. This is a lexical chunk/concept graph rather than the full Microsoft GraphRAG indexing and community-summary pipeline.
+### Qdrant's role, in plain language
 
-Without facts and without RAG, generation is limited to product identity. Uploaded guidance remains advisory and must not become invented specifications. Review is required before publishing.
+Think of Qdrant as a **meaning-based index for finding useful passages**:
+
+1. On upload, Ollama turns each document chunk into a list of numbers (an embedding). Qdrant stores that list with the chunk's ID.
+2. During a RAG generation, Ollama turns the product details into another list of numbers. Qdrant compares it with the stored lists and returns IDs of chunks whose meaning is similar.
+3. Product Hub uses those IDs to fetch the actual text from SQL Server, checks that the source is still valid, and gives the selected passages to the generation model as reference.
+
+For example, searching for a product described as “keeps you dry in heavy rain” may find a passage that says “waterproof shell,” even if the wording differs. Qdrant finds likely passages; it does not understand or write the answer. It stores vectors and IDs, not the authoritative document text. SQL Server owns the text and decides whether a document is eligible evidence.
+
+Qdrant is used only when a RAG mode is selected. **No RAG does not call Qdrant.** Naive RAG uses its semantic matches directly. Advanced RAG also searches SQL for matching words and combines those results with Qdrant's. Graph RAG uses Qdrant to find starting passages, then follows related passages in a separate graph built from SQL data. Qdrant does not do keyword search, generate content, or store that graph. Its vectors can be rebuilt from the SQL-backed documents.
+
+Advanced RAG adds independent lexical candidates from SQL, so it can find exact terms that vector search missed. Graph RAG builds and caches its bounded graph from current SQL chunks; Qdrant helps find the initial semantic anchors, while graph traversal may add related passages that were not direct vector hits. The graph is limited to 500 chunks per product and two traversal hops. It is a heuristic concept/adjacency graph, not the full Microsoft GraphRAG pipeline. Both advanced modes use the same chunk embeddings and Qdrant collection as Naive RAG; no extra reindexing or graph database is needed.
+
+After retrieval, the worker sends the product context and selected excerpts to Ollama, validates the generated draft, and saves the draft and evidence for review. The job progresses through Queued, Retrieving, Generating, Validating, and a terminal status. Retrieval failures stop generation instead of silently falling back. Disabling facts excludes structured attributes, but does not remove information already present in an uploaded document.
+
+Every new generation attempt follows this core pipeline, but not every attempt performs document retrieval: No RAG skips retrieval and does not call Qdrant or create query embeddings. Document extraction, chunking, and embedding happen when knowledge is uploaded, not on each generation. Queued generation and the synchronous `/drafts/generate` endpoint both use the same generation service; queued jobs run it in the background. The queued job can still report a `Retrieving` stage for No RAG even though it retrieves no documents. Reusing an idempotency key does not necessarily start a new attempt: a queued request can return its existing job, while synchronous generation can return an existing draft or reject a key already in progress or used by a failed generation.
+
+Select **Graph RAG** in the dialog or send `"retrievalMode": "Graph"` in the generation request. Without facts and without RAG, generation is limited to product identity. Uploaded guidance remains advisory and must not become invented specifications. Review is required before publishing.
 
 API example for advanced RAG without structured facts:
 

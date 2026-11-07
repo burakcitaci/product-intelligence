@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using ProductHub.Application.Abstractions;
 using ProductHub.Application.Content;
@@ -11,7 +12,8 @@ namespace ProductHub.Application.Agents;
 public sealed class AgentWorkflowService(
     IAgentWorkflowStore store,
     IAgentPlanner planner,
-    IOptions<AgentSettings> settings
+    IOptions<AgentSettings> settings,
+    ILogger<AgentWorkflowService> logger
 )
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
@@ -27,6 +29,12 @@ public sealed class AgentWorkflowService(
         CancellationToken cancellationToken
     )
     {
+        logger.LogInformation(
+            "Starting agent workflow for product {ProductId} with objective: {Objective}",
+            command.ProductId,
+            command.Objective
+        );
+
         Validate(command);
         var product =
             await store.GetProductAsync(command.ProductId, false, cancellationToken)
@@ -55,6 +63,12 @@ public sealed class AgentWorkflowService(
             ProductUpdateProposal? proposal = null;
             foreach (var step in plan.Steps)
             {
+                logger.LogInformation(
+                    "Executing agent workflow {WorkflowId} step {StepTool} with arguments: {StepArguments}",
+                    workflow.Id,
+                    step.Tool,
+                    step.Arguments
+                );
                 switch (step.Tool)
                 {
                     case "product.lookup":
@@ -88,6 +102,11 @@ public sealed class AgentWorkflowService(
                     JsonSerializer.Serialize(proposal, Json)
                 );
             await store.SaveChangesAsync(cancellationToken);
+            logger.LogInformation(
+                "Agent workflow {WorkflowId} completed with status {WorkflowStatus}",
+                workflow.Id,
+                workflow.Status
+            );
             return Map(workflow);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
@@ -107,6 +126,7 @@ public sealed class AgentWorkflowService(
         }
         catch (Exception ex)
         {
+            logger.LogError(ex, "Agent workflow {WorkflowId} failed unexpectedly.", workflow.Id);
             workflow.Fail("agent-failed");
             await store.SaveChangesAsync(CancellationToken.None);
             throw new AgentWorkflowException("agent-failed", "Agent workflow failed.", ex);

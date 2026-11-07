@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -72,6 +73,12 @@ public sealed class GenerationJobWorker(
             );
         if (claimed == 0)
             return true;
+        var elapsed = Stopwatch.StartNew();
+        logger.LogInformation(
+            "Started generation job {JobId} for product {ProductId}.",
+            job.Id,
+            job.ProductId
+        );
         using var run = CancellationTokenSource.CreateLinkedTokenSource(stop);
         using var monitorStop = new CancellationTokenSource();
         var monitor = MonitorAsync(job.Id, lease, run, monitorStop.Token);
@@ -110,6 +117,11 @@ public sealed class GenerationJobWorker(
                             run.Cancel();
                             ct.ThrowIfCancellationRequested();
                         }
+                        logger.LogInformation(
+                            "Generation job {JobId} entered stage {Stage}.",
+                            job.Id,
+                            stage
+                        );
                     }
                 );
             draftId = result.Id;
@@ -120,11 +132,17 @@ public sealed class GenerationJobWorker(
             status = "Cancelled";
             code = "cancelled";
             message = "Generation was cancelled. A fresh key is needed to retry.";
+            logger.LogInformation("Generation job {JobId} was cancelled.", job.Id);
         }
         catch (GenerationUnavailableException error)
         {
             code = error.ErrorCode;
             message = error.Message;
+            logger.LogWarning(
+                "Generation job {JobId} could not complete with code {ErrorCode}.",
+                job.Id,
+                code
+            );
         }
         catch (Exception error)
         {
@@ -141,7 +159,7 @@ public sealed class GenerationJobWorker(
         // A draft committed just before cancellation remains a success, and is never auto-published.
         using var finalScope = scopes.CreateScope();
         var finalDb = finalScope.ServiceProvider.GetRequiredService<ProductHubDbContext>();
-        await finalDb
+        var finalized = await finalDb
             .GenerationJobs.Where(j =>
                 j.Id == job.Id && j.LeaseToken == lease && j.Status == "Running"
             )
@@ -157,6 +175,25 @@ public sealed class GenerationJobWorker(
                         .SetProperty(j => j.UpdatedAt, DateTimeOffset.UtcNow),
                 CancellationToken.None
             );
+        if (finalized == 0)
+        {
+            logger.LogWarning(
+                "Generation job {JobId} finished as {Status}, but its lease was no longer current.",
+                job.Id,
+                status
+            );
+        }
+        else
+        {
+            logger.LogInformation(
+                "Generation job {JobId} finished as {Status} in {ElapsedMilliseconds} ms. Draft: {DraftId}; error code: {ErrorCode}.",
+                job.Id,
+                status,
+                elapsed.ElapsedMilliseconds,
+                draftId,
+                code
+            );
+        }
         return true;
     }
 
@@ -261,6 +298,11 @@ public sealed class GenerationJobWorker(
                             .SetProperty(j => j.UpdatedAt, now),
                     ct
                 );
+            logger.LogWarning(
+                "Recovered expired generation job {JobId} as {Status}.",
+                job.Id,
+                status
+            );
         }
     }
 }

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using ProductHub.Application.Content;
 using ProductHub.Domain.Content;
@@ -7,7 +8,11 @@ using ProductHub.Infrastructure.Persistence;
 
 namespace ProductHub.Infrastructure.Content;
 
-public sealed class GenerationJobService(ProductHubDbContext db, IOptions<AiSettings> settings)
+public sealed class GenerationJobService(
+    ProductHubDbContext db,
+    IOptions<AiSettings> settings,
+    ILogger<GenerationJobService> logger
+)
     : IGenerationJobService
 {
     public async Task<GenerationJobDto> EnqueueAsync(
@@ -27,7 +32,14 @@ public sealed class GenerationJobService(ProductHubDbContext db, IOptions<AiSett
                 ct
             );
         if (existing is not null)
-            return Map(existing);
+            {
+                logger.LogDebug(
+                    "Reusing generation job {JobId} for product {ProductId}.",
+                    existing.Id,
+                    command.ProductId
+                );
+                return Map(existing);
+            }
         var normalized = command with
         {
             Model = string.IsNullOrWhiteSpace(command.Model)
@@ -58,8 +70,18 @@ public sealed class GenerationJobService(ProductHubDbContext db, IOptions<AiSett
                 );
             if (existing is null)
                 throw;
+            logger.LogDebug(
+                "Reusing generation job {JobId} after a concurrent enqueue for product {ProductId}.",
+                existing.Id,
+                command.ProductId
+            );
             return Map(existing);
         }
+        logger.LogInformation(
+            "Queued generation job {JobId} for product {ProductId}.",
+            job.Id,
+            command.ProductId
+        );
         return Map(job);
     }
 
