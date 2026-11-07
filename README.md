@@ -128,7 +128,7 @@ For a RAG request, Product Hub forms a search query from product identity and, i
 | Advanced RAG | Up to three semantic searches in Qdrant, combined with independent SQL keyword candidates; BM25 and reciprocal rank fusion rank the results, then near-duplicates and excess context are removed. |
 | Graph RAG | Uses Advanced RAG to find starting passages, then follows shared-concept and adjacent-passage links in a bounded graph built from SQL chunks. |
 
-RAG modes accept Top-K from 1 to 20 (default 5). The retrieved context is limited to 12,000 characters, with each excerpt capped at 2,400 characters. Graph RAG's graph covers at most 500 chunks per product and follows at most two hops. The graph is a heuristic over text, not a separate graph database or the full Microsoft GraphRAG pipeline. Advanced and Graph RAG reuse the same indexed vectors; they do not require reindexing.
+Top-K is the requested maximum number of passages, not an ordering setting; Product Hub ranks them automatically. Naive RAG keeps the semantic-search order, Advanced RAG ranks and diversifies its combined results, and Graph RAG returns semantic anchors before graph-linked passages. Fewer than Top-K may be returned if there are not enough eligible matches or the context limit is reached. The retrieved context is limited to 12,000 characters, with each excerpt capped at 2,400 characters. Graph RAG's graph covers at most 500 chunks per product and follows at most two hops. The graph is a heuristic over text, not a separate graph database or the full Microsoft GraphRAG pipeline. Advanced and Graph RAG reuse the same indexed vectors; they do not require reindexing.
 
 #### 4. Generate and review
 
