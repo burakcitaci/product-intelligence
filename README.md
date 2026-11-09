@@ -101,54 +101,77 @@ The application records prompt version, model, token usage, latency, status, cor
 
 ## Generation and RAG options
 
-The generation dialog independently controls **Include product facts** and **Document retrieval**. Name, brand, and SKU are always supplied. Turning facts off removes structured attributes from retrieval queries and the generation prompt.
+Retrieval-augmented generation (RAG) adds relevant passages from uploaded reference documents to the draft prompt. **Include product facts** controls the structured attributes, while **Document retrieval** controls the reference passages. You can use either input on its own or combine them. Product name, brand, and SKU are always included.
 
-### Generation, from sources to draft
+### 1. Start with the QuietBurr Coffee Grinder
 
-It helps to think of generation as four separate steps. **Structured product facts and uploaded documents are different inputs**: facts describe the product directly, while documents provide passages that may be useful context.
+Sign in as an administrator and open [QuietBurr Coffee Grinder in German](http://localhost:5173/?language=de&catalog=60da283a-0a6f-4b76-ba20-70bc776044f9&product=9613c7db-b46f-477e-8641-66a0d2527234). Catalog and product IDs are assigned locally. On a fresh setup, choose **Home Coffee → QuietBurr Coffee Grinder** and select German.
 
-#### 1. Product identity and source facts
-
-Product Hub always provides the product's SKU, name, and brand as identity. The product's structured attributes (for example, material or dimensions) are optional: **Include product facts** controls whether they are added to the retrieval query and generation context.
-
-#### 2. Upload and index reference documents
-
-When a document is uploaded, Product Hub extracts text from supported files, normalizes whitespace, then splits the text into ordered, overlapping chunks. By default, chunks are about 1,200 characters with 200 characters of overlap. The splitter prefers a nearby space when it can do so without making a chunk too short. It does not split by headings or understand document meaning; the order of the passages is retained.
-
-SQL Server stores the document and authoritative chunk text. Ollama's embedding model (`nomic-embed-text` by default) converts each chunk into a vector, and Qdrant stores the vector with its chunk ID and product/document identifiers. A document is available as evidence only after indexing completes. Qdrant is a **meaning-based index**: it helps find likely passages, but does not store the authoritative text or generate the draft.
-
-#### 3. Retrieve relevant passages (RAG)
-
-For a RAG request, Product Hub forms a search query from product identity and, if enabled, structured attributes. Ollama converts this query into an embedding. Qdrant compares it with document-chunk vectors and returns matching chunk IDs. Product Hub fetches the actual text from SQL Server and checks that it belongs to the product and is from a completed, active document.
-
-| Mode | How passages are selected |
+| Input | QuietBurr example |
 | --- | --- |
-| No RAG | Skips retrieval. No query embedding or Qdrant search is performed. |
-| Naive RAG | One semantic search in Qdrant; use its best matching passages. |
-| Advanced RAG | Up to three semantic searches in Qdrant, combined with independent SQL keyword candidates; BM25 and reciprocal rank fusion rank the results, then near-duplicates and excess context are removed. |
-| Graph RAG | Uses Advanced RAG to find starting passages, then follows shared-concept and adjacent-passage links in a bounded graph built from SQL chunks. |
+| Identity | QuietBurr Coffee Grinder, Morning Craft, `COF-GRN-01` |
+| Structured facts | 40 grind settings, 250 g hopper capacity, 150 W power |
+| Reference document | [Grinder.pdf](docs/examples/Grinder.pdf), a general coffee grinder guide covering operation, grind size, cleaning, and troubleshooting |
 
-Top-K is the requested maximum number of passages, not an ordering setting; Product Hub ranks them automatically. Naive RAG keeps the semantic-search order, Advanced RAG ranks and diversifies its combined results, and Graph RAG returns semantic anchors before graph-linked passages. Fewer than Top-K may be returned if there are not enough eligible matches or the context limit is reached. The retrieved context is limited to 12,000 characters, with each excerpt capped at 2,400 characters. Graph RAG's graph covers at most 500 chunks per product and follows at most two hops. The graph is a heuristic over text, not a separate graph database or the full Microsoft GraphRAG pipeline. Advanced and Graph RAG reuse the same indexed vectors; they do not require reindexing.
+The structured facts supply the specs for this SKU. The guide can supply advice such as unplugging a grinder before cleaning. Its mention of an automatic timer is generic guidance and does not establish that QuietBurr has a timer.
 
-#### 4. Generate and review
+### 2. Turn the reference guide into searchable chunks
 
-The generation model receives product identity, optional structured facts, and (for RAG modes) the selected document passages. Ollama generates the draft; Product Hub validates and saves it with its generation settings and source evidence for review. Uploaded documents are reference material, not proof that every statement in them is a verified product fact. Disabling structured facts does not remove information from uploaded documents.
+In **New draft → Product knowledge**, select `docs/examples/Grinder.pdf` from your clone and click **Upload and index**. The example citations use the bundled filename `Grinder.pdf`.
 
-Queued jobs and the synchronous `/drafts/generate` endpoint use the same generation service; queued jobs run it in the background. A queued No RAG job may still display a `Retrieving` stage even though it skips retrieval. Retrieval failures stop generation rather than silently falling back. Reusing an idempotency key may return an existing queued job or draft, or reject a request already in progress or previously failed; it does not necessarily start a new attempt.
+1. **Product Hub** extracts the text, normalizes whitespace, and takes windows of up to 1,200 characters by default. Windows start 1,000 characters apart, giving up to 200 characters of overlap. A window may end a little early at a space, and it can span multiple sections of the guide.
+2. **Ollama** runs `nomic-embed-text` to turn each chunk into a 768-dimensional vector with the default settings.
+3. **Qdrant** indexes each vector in `product-knowledge` under its chunk ID, with product ID, document ID, and chunk ordinal as metadata. **SQL Server** holds the chunk text and document status. The document becomes eligible for retrieval once indexing completes.
 
-API example for advanced RAG without structured facts:
+The indexed guide has four chunks. For example, both `chunk-1` and `chunk-2` contain the instruction to unplug the grinder and empty its containers. That overlap carries the start of the cleaning instructions into the chunk that continues them.
+
+| Citation | Characters | Content covered |
+| --- | ---: | --- |
+| `Grinder.pdf#chunk-0` | 1,197 | Safety, first use, and basic operation |
+| `Grinder.pdf#chunk-1` | 1,195 | Operation, grind-size guidance, and the start of cleaning |
+| `Grinder.pdf#chunk-2` | 1,198 | Cleaning, troubleshooting, and the start of storage |
+| `Grinder.pdf#chunk-3` | 365 | End of troubleshooting, storage, and disposal |
+
+### 3. Compare the four retrieval modes
+
+With **Include product facts** on, Product Hub builds this search query from the saved product record. The German selection controls the draft language. Search uses the names and labels as stored.
+
+```text
+COF-GRN-01 | QuietBurr Coffee Grinder | Morning Craft | Grind settings: 40  | Hopper capacity: 250 g | Power: 150 W
+```
+
+For each search query, Ollama's embedding model produces a query vector. Qdrant filters to the selected product and returns chunk IDs ranked by cosine similarity to that vector. Product Hub loads the passages from SQL Server and checks that they belong to the product and come from completed, active documents. All three RAG modes reuse the same index.
+
+| Mode | How Product Hub chooses passages | Result for this guide with Top-K 3 |
+| --- | --- | --- |
+| **No RAG** | Skip document retrieval. Ollama runs only the draft model. | Identity and the three structured facts go into the prompt. |
+| **Naive RAG** | Embed one query, search Qdrant once, and keep eligible hits in cosine-similarity order. | `chunk-1` → `chunk-2` → `chunk-0`. Grind-size guidance ranks first. |
+| **Advanced RAG** | Search Qdrant with up to three query variants and independently find SQL keyword matches. Use BM25 to rank the combined candidates by keyword relevance, then use reciprocal rank fusion to merge the keyword and vector rankings. Favor passages that add new context. | `chunk-2` → `chunk-0` → `chunk-1`. Cleaning ranks first. |
+| **Graph RAG** | Start with Advanced RAG results as anchors. Follow shared-term links or links between consecutive chunks in the same document. | `chunk-2` → `chunk-0` → `chunk-1`. The first two are anchors. The last is reached from `chunk-2` in one hop. |
+
+The RAG rows show one retrieval-only run against the indexed guide. Graph and Advanced returned the same passages in this run. Graph recorded the path `Grinder.pdf#chunk-2 → shared-concept:2.empty → Grinder.pdf#chunk-1`, shown here with the bundled filename. The `2.empty` label comes from the numbered cleaning instruction that appears in both chunks. Graph links are based on text and chunk order. The graph uses up to 500 active chunks for the product and explores up to two hops.
+
+**Top-K** is the maximum number of excerpts. Eligibility checks can reduce the count. Advanced and Graph also remove near-duplicates and cap context at 2,400 characters per excerpt and 12,000 characters across excerpts. Turning **Include product facts** off removes the structured attributes from the query and prompt. Any information already in a retrieved passage can still appear in the reference context.
+
+### 4. Generate and inspect the German draft
+
+1. In **New draft**, select `qwen3:8b`, keep **Include product facts** on, and choose **Graph RAG** with **Top-K** set to `3`.
+2. Click **Generate draft**. Ollama now runs the draft model with the German language setting, product identity, structured facts, and retrieved excerpts. Product Hub validates and saves the response as a draft. A failed or empty RAG search stops generation before the draft model is called.
+3. Open **Model audit → Attempt details** to see citations, retrieval mode, and graph paths. In the draft's claim review, check that a spec such as `250 g Fassungsvermögen` is backed by the structured product record and that any cleaning advice is grounded in the saved guide excerpt. Keep the language, model, and facts setting fixed when comparing the four retrieval modes.
+
+The UI runs generation as a background job. To run the same generation synchronously, send this body to `POST /api/products/{productId}/drafts/generate` with an administrator session and a fresh `Idempotency-Key` header.
 
 ```json
 {
-  "language": "en",
+  "language": "de",
   "model": "qwen3:8b",
-  "includeFacts": false,
-  "retrievalMode": "Advanced",
-  "topK": 5
+  "includeFacts": true,
+  "retrievalMode": "Graph",
+  "topK": 3
 }
 ```
 
-Send this to `POST /api/products/{productId}/drafts/generate` with an administrator session and a fresh `Idempotency-Key` header. Existing requests with `useRag: true` select naive RAG when `retrievalMode` is omitted.
+To compare passages without creating drafts, send `query` (the text above), `productId`, `limit: 3`, and `mode` (`Naive`, `Advanced`, or `Graph`) to `POST /api/knowledge/search`. Existing generation requests with `useRag: true` select Naive when `retrievalMode` is omitted.
 
 This includes migration `20261103120000_AddGenerationFactsSelection` and defaults to prompt `product-description-v4`. Development startup applies pending migrations; other deployments must apply them before restarting the API:
 
