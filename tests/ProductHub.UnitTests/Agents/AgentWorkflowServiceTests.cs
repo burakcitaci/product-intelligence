@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using ProductHub.Application.Abstractions;
 using ProductHub.Application.Agents;
@@ -98,7 +99,8 @@ public sealed class AgentWorkflowServiceTests
                     TimeoutSeconds = 10,
                     MaxArgumentLength = 100,
                 }
-            )
+            ),
+            NullLogger<AgentWorkflowService>.Instance
         );
 
     private sealed class FakePlanner(AgentPlan plan) : IAgentPlanner
