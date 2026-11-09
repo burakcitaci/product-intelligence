@@ -103,6 +103,53 @@ The application records prompt version, model, token usage, latency, status, cor
 
 Retrieval-augmented generation (RAG) adds relevant passages from uploaded reference documents to the draft prompt. **Include product facts** controls the structured attributes, while **Document retrieval** controls the reference passages. You can use either input on its own or combine them. Product name, brand, and SKU are always included.
 
+### How a product query becomes a draft
+
+```mermaid
+---
+config:
+  flowchart:
+    nodeSpacing: 24
+    rankSpacing: 30
+    padding: 10
+    subGraphTitleMargin:
+      top: 6
+      bottom: 12
+---
+flowchart TD
+    accTitle: QuietBurr document indexing and draft generation
+    accDescr: Product Hub indexes guide chunks before generation. At draft time it embeds a query built from the product record, searches Qdrant, loads the matching text from SQL Server, and sends the assembled prompt to Ollama's draft model.
+
+    subgraph indexing["Upload and index"]
+        pdf["Grinder.pdf"] --> split["Product Hub extracts text<br/>and splits it into chunks"]
+        split -->|Chunk text| docEmbed["Ollama · nomic-embed-text<br/>Embeds each chunk"]
+        docEmbed -->|Vectors and chunk IDs| index[("Qdrant vector index")]
+        split -->|Chunk text and IDs| stored[("SQL Server<br/>Original chunk text")]
+    end
+
+    subgraph drafting["Generate draft"]
+        product["QuietBurr product record<br/>Identity + selected facts"]
+        product -->|RAG enabled| query["Product Hub builds<br/>the search query"]
+        query -->|Query text| queryEmbed["Ollama · nomic-embed-text<br/>Embeds the query"]
+        queryEmbed -->|Query vector| search["Qdrant · cosine search<br/>Filter by product ID"]
+        search -->|Ranked chunk IDs| read["Read chunks from SQL Server<br/>Select eligible excerpts"]
+        read -->|Excerpt text| prompt["Build the draft prompt<br/>German + product details<br/>+ any excerpts"]
+        product -->|Product details| prompt
+        prompt -->|Prompt text| generate["Ollama · qwen3:8b<br/>Writes the German draft"]
+        generate -->|Draft JSON| save["Product Hub validates<br/>and saves the draft"]
+    end
+
+    index -.->|Indexed vectors| search
+    stored -.->|Stored chunk text| read
+
+    classDef ollama fill:#e2efff,stroke:#4272a4,color:#152c48
+    classDef qdrant fill:#e1f5ed,stroke:#387762,color:#103a2f
+    class docEmbed,queryEmbed,generate ollama
+    class index,search qdrant
+```
+
+Read the draft flow from **QuietBurr product record**. Qdrant enters after Ollama turns the query into a vector, and the chunk IDs it returns lead to the actual text in SQL Server. **No RAG** takes the direct path from the product record to the draft prompt. The draft model receives text in either case.
+
 ### 1. Start with the QuietBurr Coffee Grinder
 
 Sign in as an administrator and open [QuietBurr Coffee Grinder in German](http://localhost:5173/?language=de&catalog=60da283a-0a6f-4b76-ba20-70bc776044f9&product=9613c7db-b46f-477e-8641-66a0d2527234). Catalog and product IDs are assigned locally. On a fresh setup, choose **Home Coffee → QuietBurr Coffee Grinder** and select German.
